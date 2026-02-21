@@ -190,8 +190,8 @@ export function TubeMap() {
         source: 'tube-lines',
         paint: {
           'line-color': '#ffffff',
-          'line-width': 5,
-          'line-opacity': 0.3,
+          'line-width': 6,
+          'line-opacity': 0.2,
         },
         layout: {
           'line-cap': 'round',
@@ -199,7 +199,7 @@ export function TubeMap() {
         },
       });
 
-      // Add tube lines layer
+      // Add tube lines layer with offset for parallel lines
       mapInstance.addLayer({
         id: 'tube-lines-layer',
         type: 'line',
@@ -223,6 +223,16 @@ export function TubeMap() {
           ],
           'line-width': 3,
           'line-opacity': 1,
+          // Offset parallel lines so they don't overlap
+          'line-offset': [
+            'match',
+            ['get', 'lineName'],
+            'Circle', 3,
+            'Hammersmith & City', -3,
+            'District', 0,
+            'Metropolitan', 3,
+            0,
+          ],
         },
         layout: {
           'line-cap': 'round',
@@ -260,7 +270,7 @@ export function TubeMap() {
         id: 'tube-stations-labels',
         type: 'symbol',
         source: 'tube-stations',
-        minzoom: 13,
+        minzoom: 12,
         layout: {
           'text-field': ['get', 'name'],
           'text-size': 11,
@@ -281,15 +291,15 @@ export function TubeMap() {
         data: { type: 'FeatureCollection', features: [] },
       });
 
-      // Add trails layer (fading line behind trains)
+      // Add trails layer (subtle fading line behind trains)
       mapInstance.addLayer({
         id: 'trails-layer',
         type: 'line',
         source: 'trails',
         paint: {
           'line-color': ['get', 'color'],
-          'line-width': 4,
-          'line-opacity': 0.4,
+          'line-width': 2,
+          'line-opacity': 0.3,
         },
         layout: {
           'line-cap': 'round',
@@ -303,7 +313,26 @@ export function TubeMap() {
         data: { type: 'FeatureCollection', features: [] },
       });
 
-      // Add trains layer
+      // Add train glow layer (subtle halo effect)
+      mapInstance.addLayer({
+        id: 'trains-glow',
+        type: 'circle',
+        source: 'trains',
+        paint: {
+          'circle-radius': [
+            'interpolate',
+            ['linear'],
+            ['zoom'],
+            10, 8,
+            14, 14,
+          ],
+          'circle-color': ['get', 'color'],
+          'circle-opacity': 0.3,
+          'circle-blur': 1,
+        },
+      });
+
+      // Add trains layer - solid dot with white outline for visibility
       mapInstance.addLayer({
         id: 'trains-layer',
         type: 'circle',
@@ -314,11 +343,12 @@ export function TubeMap() {
             ['linear'],
             ['zoom'],
             10, 5,
-            14, 10,
+            14, 9,
           ],
           'circle-color': ['get', 'color'],
           'circle-stroke-color': '#ffffff',
-          'circle-stroke-width': 2,
+          'circle-stroke-width': 1.5,
+          'circle-stroke-opacity': 0.8,
         },
       });
 
@@ -330,13 +360,19 @@ export function TubeMap() {
         const props = feature.properties;
         const coordinates = (feature.geometry as Point).coordinates.slice() as [number, number];
 
-        new maplibregl.Popup()
+        new maplibregl.Popup({ closeButton: false, className: 'train-popup' })
           .setLngLat(coordinates)
           .setHTML(`
-            <div style="color: #333; padding: 4px;">
-              <strong style="color: ${props?.color}">${props?.lineName} Line</strong><br/>
-              To: ${props?.destination}<br/>
-              <small>${props?.timeToStation}s to station</small>
+            <div style="font-family: system-ui, sans-serif; padding: 2px;">
+              <div style="font-weight: 600; color: ${props?.color}; border-bottom: 2px solid ${props?.color}; padding-bottom: 4px; margin-bottom: 4px;">
+                ${props?.lineName} Line
+              </div>
+              <div style="color: #333; font-size: 13px;">
+                <div>→ ${props?.destination}</div>
+                <div style="color: #666; font-size: 11px; margin-top: 2px;">
+                  ${props?.timeToStation}s to next station
+                </div>
+              </div>
             </div>
           `)
           .addTo(mapInstance);
@@ -363,15 +399,22 @@ export function TubeMap() {
     <div className="relative w-full h-full">
       <div ref={mapContainer} className="w-full h-full" />
 
-      {/* Status overlay - left */}
-      <div className="absolute top-4 left-4 bg-black/70 text-white px-3 py-2 rounded text-sm">
-        {isLoading && !positions.length && <span>Loading trains...</span>}
-        {error && <span className="text-red-400">Error: {error.message}</span>}
-        {positions.length > 0 && (
-          <span>
-            {positions.length} trains live
-          </span>
-        )}
+      {/* Title + Status overlay - left */}
+      <div className="absolute top-4 left-4 flex flex-col gap-2">
+        <div className="bg-black/80 text-white px-4 py-2 rounded">
+          <h1 className="text-lg font-bold tracking-tight">DudeWheresMyTube</h1>
+          <p className="text-xs text-gray-400">Live London Underground Tracker</p>
+        </div>
+        <div className="bg-black/70 text-white px-3 py-2 rounded text-sm">
+          {isLoading && !positions.length && <span>Loading trains...</span>}
+          {error && <span className="text-red-400">Error: {error.message}</span>}
+          {positions.length > 0 && (
+            <span className="flex items-center gap-2">
+              <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+              {positions.length} trains live
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Timer badge - right */}
