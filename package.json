@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@tanstack/react-query": "^5.90.21",
+    "fast-xml-parser": "^5.3.7",
     "maplibre-gl": "^5.18.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
