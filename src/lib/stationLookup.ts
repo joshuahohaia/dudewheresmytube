@@ -1,5 +1,5 @@
 import stationsData from '../data/tfl_stations.json';
-import type { FeatureCollection, Feature, Point } from 'geojson';
+import type { FeatureCollection, Point } from 'geojson';
 
 // Build a lookup map from station name to coordinates
 const stationMap = new Map<string, [number, number]>();

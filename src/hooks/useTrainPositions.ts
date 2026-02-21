@@ -19,15 +19,6 @@ interface TrainState {
   velocity: [number, number]; // Current velocity for momentum-based easing
 }
 
-// Smooth easing - slow start and end, fast middle
-function easeInOutSine(t: number): number {
-  return -(Math.cos(Math.PI * t) - 1) / 2;
-}
-
-// Ease out cubic - fast start, slow end (good for momentum)
-function easeOutCubic(t: number): number {
-  return 1 - Math.pow(1 - t, 3);
-}
 
 // Smooth start with momentum preservation
 function easeInOutQuad(t: number): number {
@@ -80,7 +71,7 @@ let lastFrameTime = Date.now();
 export function useTrainPositions(trains: Train[] | undefined) {
   const [positions, setPositions] = useState<TrainWithPosition[]>([]);
   const trainStates = useRef<Map<string, TrainState>>(new Map());
-  const animationRef = useRef<number>();
+  const animationRef = useRef<number | undefined>(undefined);
 
   // Update train states when new data arrives
   useEffect(() => {
@@ -142,7 +133,7 @@ export function useTrainPositions(trains: Train[] | undefined) {
 
     // Remove stale trains
     const currentIds = new Set(trains.map((t) => t.id));
-    for (const [id, state] of trainStates.current.entries()) {
+    for (const [id] of trainStates.current.entries()) {
       if (!currentIds.has(id)) {
         trainStates.current.delete(id);
       }

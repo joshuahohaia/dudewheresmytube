@@ -1,5 +1,5 @@
 import linesData from '../data/tfl_lines.json';
-import type { FeatureCollection, Feature, LineString, Position } from 'geojson';
+import type { FeatureCollection, LineString, Position } from 'geojson';
 
 interface LineSegment {
   lineName: string;
@@ -38,29 +38,6 @@ function distance(a: Position, b: Position): number {
   const dx = a[0] - b[0];
   const dy = a[1] - b[1];
   return Math.sqrt(dx * dx + dy * dy);
-}
-
-// Find the closest point on a line segment to a given point
-function closestPointOnSegment(
-  point: Position,
-  segStart: Position,
-  segEnd: Position
-): { point: Position; t: number } {
-  const dx = segEnd[0] - segStart[0];
-  const dy = segEnd[1] - segStart[1];
-  const lenSq = dx * dx + dy * dy;
-
-  if (lenSq === 0) {
-    return { point: segStart, t: 0 };
-  }
-
-  let t = ((point[0] - segStart[0]) * dx + (point[1] - segStart[1]) * dy) / lenSq;
-  t = Math.max(0, Math.min(1, t));
-
-  return {
-    point: [segStart[0] + t * dx, segStart[1] + t * dy],
-    t,
-  };
 }
 
 // Find the track path between two points for a given line

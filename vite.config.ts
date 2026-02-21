@@ -1,4 +1,4 @@
-import { defineConfig, Plugin } from 'vite'
+import { defineConfig, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 
 // TfL line IDs for Underground (used in Unified API)
@@ -70,7 +70,7 @@ async function fetchLineData(lineId: string): Promise<Train[]> {
       return [];
     }
 
-    const arrivals: TflArrival[] = await response.json();
+    const arrivals = await response.json() as TflArrival[];
     const trains: Train[] = [];
     const seenVehicles = new Set<string>();
 
