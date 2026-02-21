@@ -402,7 +402,7 @@ export function TubeMap() {
       {/* Title + Status overlay - left */}
       <div className="absolute top-4 left-4 flex flex-col gap-2">
         <div className="bg-black/80 text-white px-4 py-2 rounded">
-          <h1 className="text-lg font-bold tracking-tight">DudeWheresMyTube</h1>
+          <h1 className="text-lg font-bold tracking-tight">Dude Wheres My Tube?</h1>
           <p className="text-xs text-gray-400">Live London Underground Tracker</p>
         </div>
         <div className="bg-black/70 text-white px-3 py-2 rounded text-sm">

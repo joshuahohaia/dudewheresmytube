@@ -1,24 +1,31 @@
-import { XMLParser } from 'fast-xml-parser';
+import type { VercelRequest, VercelResponse } from '@vercel/node';
 
-export const config = {
-  runtime: 'edge',
-};
+const LINE_IDS = [
+  'bakerloo',
+  'central',
+  'circle',
+  'district',
+  'hammersmith-city',
+  'jubilee',
+  'metropolitan',
+  'northern',
+  'piccadilly',
+  'victoria',
+  'waterloo-city',
+] as const;
 
-// TfL line codes for Underground
-const LINE_CODES = ['B', 'C', 'D', 'H', 'J', 'M', 'N', 'P', 'V', 'W', 'L'] as const;
-
-const LINE_NAMES: Record<string, string> = {
-  'B': 'Bakerloo',
-  'C': 'Central',
-  'D': 'District',
-  'H': 'Hammersmith & City',
-  'J': 'Jubilee',
-  'M': 'Metropolitan',
-  'N': 'Northern',
-  'P': 'Piccadilly',
-  'V': 'Victoria',
-  'W': 'Waterloo & City',
-  'L': 'Circle',
+const LINE_DISPLAY_NAMES: Record<string, string> = {
+  'bakerloo': 'Bakerloo',
+  'central': 'Central',
+  'circle': 'Circle',
+  'district': 'District',
+  'hammersmith-city': 'Hammersmith & City',
+  'jubilee': 'Jubilee',
+  'metropolitan': 'Metropolitan',
+  'northern': 'Northern',
+  'piccadilly': 'Piccadilly',
+  'victoria': 'Victoria',
+  'waterloo-city': 'Waterloo & City',
 };
 
 interface Train {
@@ -27,163 +34,86 @@ interface Train {
   lineName: string;
   currentStation: string;
   destination: string;
-  timeToStation: number; // seconds
+  timeToStation: number;
   direction: string;
-  trackCode: string;
+  vehicleId: string;
+  naptanId: string;
 }
 
-interface TrackerNetPlatform {
-  Name?: string;
-  Num?: string;
-  TrackCode?: string;
-  Train?: TrackerNetTrain | TrackerNetTrain[];
+interface TflArrival {
+  id: string;
+  vehicleId: string;
+  naptanId: string;
+  stationName: string;
+  lineId: string;
+  lineName: string;
+  platformName: string;
+  direction: string;
+  destinationName: string;
+  timeToStation: number;
 }
 
-interface TrackerNetTrain {
-  SetNumber?: string;
-  TripNumber?: string;
-  SecondsTo?: string;
-  TimeTo?: string;
-  Location?: string;
-  Destination?: string;
-  DestCode?: string;
-  TrackCode?: string;
-}
-
-interface TrackerNetStation {
-  Code?: string;
-  Name?: string;
-  Platform?: TrackerNetPlatform | TrackerNetPlatform[];
-}
-
-interface TrackerNetResponse {
-  ROOT?: {
-    S?: TrackerNetStation | TrackerNetStation[];
-  };
-}
-
-async function fetchLineData(lineCode: string, apiKey: string): Promise<Train[]> {
-  const url = `https://api.tfl.gov.uk/TrackerNet/PredictionSummary/${lineCode}?app_key=${apiKey}`;
+async function fetchLineData(lineId: string): Promise<Train[]> {
+  const url = `https://api.tfl.gov.uk/Line/${lineId}/Arrivals`;
 
   try {
     const response = await fetch(url);
     if (!response.ok) {
-      console.error(`Failed to fetch line ${lineCode}: ${response.status}`);
+      console.error(`Failed to fetch line ${lineId}: ${response.status}`);
       return [];
     }
 
-    const xmlText = await response.text();
-    const parser = new XMLParser({
-      ignoreAttributes: false,
-      attributeNamePrefix: '',
-    });
-
-    const data: TrackerNetResponse = parser.parse(xmlText);
+    const arrivals = await response.json() as TflArrival[];
     const trains: Train[] = [];
+    const seenVehicles = new Set<string>();
 
-    // Navigate the XML structure
-    const stations = data.ROOT?.S;
-    if (!stations) return [];
+    for (const arrival of arrivals) {
+      if (seenVehicles.has(arrival.vehicleId)) continue;
+      seenVehicles.add(arrival.vehicleId);
 
-    const stationArray = Array.isArray(stations) ? stations : [stations];
+      if (arrival.timeToStation > 300) continue;
 
-    for (const station of stationArray) {
-      const platforms = station.Platform;
-      if (!platforms) continue;
-
-      const platformArray = Array.isArray(platforms) ? platforms : [platforms];
-
-      for (const platform of platformArray) {
-        const platformTrains = platform.Train;
-        if (!platformTrains) continue;
-
-        const trainArray = Array.isArray(platformTrains) ? platformTrains : [platformTrains];
-
-        for (const train of trainArray) {
-          if (!train.SetNumber || train.SetNumber === '0') continue;
-
-          const timeToStation = parseInt(train.SecondsTo || '0', 10);
-
-          // Only include trains that are approaching (within 5 minutes)
-          if (timeToStation > 300) continue;
-
-          trains.push({
-            id: `${lineCode}-${train.SetNumber}-${train.TripNumber || '0'}`,
-            lineId: lineCode,
-            lineName: LINE_NAMES[lineCode] || lineCode,
-            currentStation: station.Name || 'Unknown',
-            destination: train.Destination || 'Unknown',
-            timeToStation,
-            direction: train.DestCode || '',
-            trackCode: platform.TrackCode || train.TrackCode || '',
-          });
-        }
-      }
+      trains.push({
+        id: `${lineId}-${arrival.vehicleId}`,
+        lineId: lineId,
+        lineName: LINE_DISPLAY_NAMES[lineId] || arrival.lineName,
+        currentStation: (arrival.stationName || 'Unknown').replace(' Underground Station', ''),
+        destination: (arrival.destinationName || 'Unknown').replace(' Underground Station', ''),
+        timeToStation: arrival.timeToStation,
+        direction: arrival.direction || '',
+        vehicleId: arrival.vehicleId,
+        naptanId: arrival.naptanId || '',
+      });
     }
 
     return trains;
   } catch (error) {
-    console.error(`Error fetching line ${lineCode}:`, error);
+    console.error(`Error fetching line ${lineId}:`, error);
     return [];
   }
 }
 
-// Simple in-memory cache
-let cache: { data: Train[]; timestamp: number } | null = null;
-const CACHE_TTL = 15000; // 15 seconds
+export default async function handler(req: VercelRequest, res: VercelResponse) {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Cache-Control', 's-maxage=10, stale-while-revalidate');
 
-export default async function handler(request: Request): Promise<Response> {
-  // CORS headers
-  const headers = {
-    'Access-Control-Allow-Origin': '*',
-    'Access-Control-Allow-Methods': 'GET, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
-    'Content-Type': 'application/json',
-    'Cache-Control': 'public, s-maxage=15, stale-while-revalidate=30',
-  };
-
-  if (request.method === 'OPTIONS') {
-    return new Response(null, { headers });
-  }
-
-  // Check cache
   const now = Date.now();
-  if (cache && now - cache.timestamp < CACHE_TTL) {
-    return new Response(JSON.stringify({
-      trains: cache.data,
-      timestamp: cache.timestamp,
-      cached: true,
-    }), { headers });
-  }
 
-  // Get API key from environment
-  const apiKey = process.env.TFL_API_KEY;
-  if (!apiKey) {
-    return new Response(JSON.stringify({
-      error: 'TFL_API_KEY not configured',
-      trains: [],
-      timestamp: now,
-    }), { status: 500, headers });
-  }
-
-  // Fetch all lines in parallel
+  console.log('Fetching train data from TfL Unified API...');
   const results = await Promise.all(
-    LINE_CODES.map(code => fetchLineData(code, apiKey))
+    LINE_IDS.map(lineId => fetchLineData(lineId))
   );
 
-  // Flatten results and deduplicate by train ID
   const allTrains = results.flat();
   const uniqueTrains = Array.from(
     new Map(allTrains.map(t => [t.id, t])).values()
   );
 
-  // Update cache
-  cache = { data: uniqueTrains, timestamp: now };
+  console.log(`Fetched ${uniqueTrains.length} trains`);
 
-  return new Response(JSON.stringify({
+  res.status(200).json({
     trains: uniqueTrains,
     timestamp: now,
-    cached: false,
     count: uniqueTrains.length,
-  }), { headers });
+  });
 }
