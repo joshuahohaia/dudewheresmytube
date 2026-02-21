@@ -90,6 +90,22 @@ export function TubeMap() {
         data: undergroundLines,
       });
 
+      // Add tube lines casing (outline) for visibility on dark background
+      mapInstance.addLayer({
+        id: 'tube-lines-casing',
+        type: 'line',
+        source: 'tube-lines',
+        paint: {
+          'line-color': '#ffffff',
+          'line-width': 5,
+          'line-opacity': 0.3,
+        },
+        layout: {
+          'line-cap': 'round',
+          'line-join': 'round',
+        },
+      });
+
       // Add tube lines layer - render each line with its color
       mapInstance.addLayer({
         id: 'tube-lines-layer',
@@ -106,14 +122,14 @@ export function TubeMap() {
             'Hammersmith & City', '#F3A9BB',
             'Jubilee', '#A0A5A9',
             'Metropolitan', '#9B0056',
-            'Northern', '#000000',
+            'Northern', '#1a1a1a', // Slightly lighter than pure black
             'Piccadilly', '#003688',
             'Victoria', '#0098D4',
             'Waterloo & City', '#95CDBA',
             '#888888', // default
           ],
           'line-width': 3,
-          'line-opacity': 0.9,
+          'line-opacity': 1,
         },
         layout: {
           'line-cap': 'round',
