@@ -63,7 +63,7 @@ function calculateHeading(from: [number, number], to: [number, number]): number 
   return (angle + 360) % 360;
 }
 
-const ANIMATION_DURATION = 14000; // Animate over 14 seconds (just under 15s refresh)
+const ANIMATION_DURATION = 9000; // Animate over 9 seconds (just under 10s refresh)
 const TRAIL_LENGTH = 20;
 const SMOOTH_TIME = 0.5; // Smoothing factor for velocity-based movement (seconds)
 let lastFrameTime = Date.now();

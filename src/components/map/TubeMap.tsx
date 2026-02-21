@@ -89,8 +89,8 @@ export function TubeMap() {
   const { positions, getTrails } = useTrainPositions(trainsData?.trains);
 
   // Countdown timer state
-  const [timeInfo, setTimeInfo] = useState({ sinceLast: 0, untilNext: 15 });
-  const REFETCH_INTERVAL = 15; // seconds
+  const [timeInfo, setTimeInfo] = useState({ sinceLast: 0, untilNext: 10 });
+  const REFETCH_INTERVAL = 10; // seconds
 
   useEffect(() => {
     const updateTimer = () => {

@@ -13,8 +13,8 @@ export function useTrains() {
   return useQuery({
     queryKey: ['trains'],
     queryFn: fetchTrains,
-    refetchInterval: 15000, // Poll every 15 seconds (44 req/min, under 50 limit)
-    staleTime: 12000, // Consider data fresh for 12 seconds
+    refetchInterval: 10000, // Poll every 10 seconds (Vercel caches for 10s)
+    staleTime: 8000, // Consider data fresh for 8 seconds
     refetchOnWindowFocus: true,
     retry: 3,
     retryDelay: (attemptIndex) => Math.min(1000 * 2 ** attemptIndex, 10000),
