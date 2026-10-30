@@ -7,7 +7,7 @@ export class TrainFeedError extends Error {
 }
 let nextAttemptAt = 0;
 
-async function fetchTrains(): Promise<TrainsResponse> {
+export async function fetchTrains(): Promise<TrainsResponse> {
   if (Date.now() < nextAttemptAt) throw new TrainFeedError('TfL is rate-limiting requests. Retrying shortly.', nextAttemptAt);
   const response = await fetch('/api/trains');
   if (!response.ok) {
