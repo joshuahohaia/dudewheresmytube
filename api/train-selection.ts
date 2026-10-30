@@ -8,6 +8,8 @@ export interface TflArrival {
   platformName: string;
   direction: string;
   destinationName: string;
+  expectedArrival?: string;
+  timestamp?: string;
   timeToStation: number;
 }
 
