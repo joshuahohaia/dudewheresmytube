@@ -5,7 +5,7 @@ import type { FeatureCollection, Point } from 'geojson';
 const stationMap = new Map<string, [number, number]>();
 
 // Normalize station names for matching
-function normalizeStationName(name: string): string {
+export function normalizeStationName(name: string): string {
   return name
     .toLowerCase()
     .replace(/['']/g, "'")
