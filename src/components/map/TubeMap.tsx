@@ -390,7 +390,7 @@ export function TubeMap() {
             <>
               <span className="flex items-center gap-2">
                 <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                {positions.length} trains live
+                {positions.length} trains {error ? '(last known)' : 'live'}
               </span>
               <span className="block text-[11px] text-gray-400 mt-1">
                 Between-station positions are estimates
