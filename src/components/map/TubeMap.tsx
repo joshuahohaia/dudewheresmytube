@@ -347,7 +347,7 @@ export function TubeMap() {
               <div style="color: #333; font-size: 13px;">
                 <div>→ ${props?.destination}</div>
                 <div style="color: #666; font-size: 11px; margin-top: 2px;">
-                  ${props?.timeToStation}s to next station
+                  est. ${props?.timeToStation}s to next station
                 </div>
               </div>
             </div>
@@ -386,10 +386,15 @@ export function TubeMap() {
           {isLoading && !positions.length && <span>Loading trains...</span>}
           {error && <span className="text-red-400">Error: {error.message}</span>}
           {positions.length > 0 && (
-            <span className="flex items-center gap-2">
-              <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-              {positions.length} trains live
-            </span>
+            <>
+              <span className="flex items-center gap-2">
+                <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                {positions.length} trains live
+              </span>
+              <span className="block text-[11px] text-gray-400 mt-1">
+                Between-station positions are estimates
+              </span>
+            </>
           )}
         </div>
       </div>
