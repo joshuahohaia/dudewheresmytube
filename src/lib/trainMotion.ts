@@ -363,11 +363,20 @@ export function updateMotion(
   if (existing && existing.lineName === lineName) {
     // Include the old route, so an early station flip need not teleport a train
     // to the old target. It may still be approaching that station.
-    const route = routeStations(lineName, existing.originStation || existing.targetStation, targetStation);
-    const routed = route && route.length > 1 ? routePath(lineGraphs.get(lineName)!, route) : null;
-    if (routed) {
-      originStation = route![0];
-      built = snapEndpoints(routed, getStationCoordinates(originStation), targetCoords);
+    const route = routeStations(lineName, existing.targetStation, targetStation);
+    const onward = route && route.length > 1 ? routePath(lineGraphs.get(lineName)!, route) : null;
+    if (onward) {
+      originStation = existing.originStation || existing.targetStation;
+      // Keep the previous approach as a prefix. Shortest origin-to-new-target
+      // routes can skip the train's actual displayed position at junctions.
+      const previousProgress = progressMeters(existing, now);
+      const index = existing.cumMeters.findIndex(m => m > previousProgress);
+      const suffix = existing.path && index >= 0 ? existing.path.slice(index) : [];
+      const previousPosition = motionTarget(existing, now).position;
+      const joined = existing.path ? [previousPosition, ...suffix, ...onward.path.slice(1)] : onward.path;
+      const cumulative = [0];
+      for(let i=1;i<joined.length;i++) cumulative.push(cumulative[i-1]+metersBetween(joined[i-1],joined[i]));
+      built = snapEndpoints({path:joined,cumMeters:cumulative,totalMeters:cumulative[cumulative.length-1]},null,targetCoords);
     }
   }
   const path = built?.path || null;
