@@ -9,13 +9,12 @@ interface TrainState {
   train: Train;
   trail: [number, number][];
   lastInterpolatedPosition: [number, number] | null;
-  velocity: [number, number];
+  seenAt: number;
 }
 
 export function useTrainPositions(trains: Train[] | undefined) {
   const [positions, setPositions] = useState<TrainWithPosition[]>([]);
   const trainStates = useRef<Map<string, TrainState>>(new Map());
-  const lastFrameTime = useRef<number>(0);
 
   // Update motion models when new data arrives
   useEffect(() => {
@@ -37,13 +36,14 @@ export function useTrainPositions(trains: Train[] | undefined) {
       if (existing) {
         existing.motion = motion;
         existing.train = train;
+        existing.seenAt = now;
       } else {
         trainStates.current.set(train.id, {
           motion,
           train,
           trail: [motion.targetCoords],
           lastInterpolatedPosition: null,
-          velocity: [0, 0],
+          seenAt: now,
         });
       }
     });
@@ -51,7 +51,7 @@ export function useTrainPositions(trains: Train[] | undefined) {
     // Remove trains that dropped out of the feed
     const currentIds = new Set(trains.map((t) => t.id));
     for (const [id] of trainStates.current.entries()) {
-      if (!currentIds.has(id)) {
+      if (!currentIds.has(id) && (trains.length === 0 || now - trainStates.current.get(id)!.seenAt > 30_000)) {
         trainStates.current.delete(id);
       }
     }
@@ -60,15 +60,14 @@ export function useTrainPositions(trains: Train[] | undefined) {
   // Animation loop - runs at 60fps
   useEffect(() => {
     let raf = 0;
-    lastFrameTime.current = Date.now();
 
     const animate = () => {
       const now = Date.now();
-    lastFrameTime.current = now;
 
     const result: TrainWithPosition[] = [];
 
     trainStates.current.forEach((state) => {
+      if (now - state.seenAt > 30_000) return;
       const { position: target, heading } = motionTarget(state.motion, now);
 
       const position = target;
@@ -85,6 +84,7 @@ export function useTrainPositions(trains: Train[] | undefined) {
       result.push({
         ...state.train,
         position,
+        timeToStation: Math.max(0, Math.ceil((state.motion.arrivalTime - now) / 1000)),
         heading,
       });
     });
