@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import type { Train, TrainWithPosition } from '../types/train';
 import { updateMotion, motionTarget, type MotionState } from '../lib/trainMotion';
 
+const TRAIL_LENGTH = 20;
+
 interface TrainState {
   motion: MotionState;
   train: Train;
@@ -9,36 +11,6 @@ interface TrainState {
   lastInterpolatedPosition: [number, number] | null;
   velocity: [number, number];
 }
-
-// Spring-like interpolation toward a moving target. The motion model decides
-// where the train should be; this only absorbs small corrections (a few
-// seconds of prediction drift, a station flip) so they don't visibly snap.
-function smoothDamp(
-  current: number,
-  target: number,
-  velocity: number,
-  smoothTime: number,
-  deltaTime: number
-): { value: number; velocity: number } {
-  // Based on Game Programming Gems 4 smooth damp
-  const omega = 2 / smoothTime;
-  const x = omega * deltaTime;
-  const exp = 1 / (1 + x + 0.48 * x * x + 0.235 * x * x * x);
-  const change = current - target;
-  const temp = (velocity + omega * change) * deltaTime;
-  const newVelocity = (velocity - omega * temp) * exp;
-  const newValue = target + (change + temp) * exp;
-
-  // Prevent overshooting
-  if ((target - current > 0) === (newValue > target)) {
-    return { value: target, velocity: 0 };
-  }
-
-  return { value: newValue, velocity: newVelocity };
-}
-
-const TRAIL_LENGTH = 20;
-const SMOOTH_TIME = 0.8; // seconds to absorb a correction
 
 export function useTrainPositions(trains: Train[] | undefined) {
   const [positions, setPositions] = useState<TrainWithPosition[]>([]);
@@ -92,7 +64,6 @@ export function useTrainPositions(trains: Train[] | undefined) {
 
     const animate = () => {
       const now = Date.now();
-    const deltaTime = Math.min((now - lastFrameTime.current) / 1000, 0.1); // Cap delta to prevent jumps
     lastFrameTime.current = now;
 
     const result: TrainWithPosition[] = [];
@@ -100,17 +71,7 @@ export function useTrainPositions(trains: Train[] | undefined) {
     trainStates.current.forEach((state) => {
       const { position: target, heading } = motionTarget(state.motion, now);
 
-      let position: [number, number];
-      const currentPos = state.lastInterpolatedPosition;
-      if (!currentPos) {
-        position = target;
-        state.velocity = [0, 0];
-      } else {
-        const smoothX = smoothDamp(currentPos[0], target[0], state.velocity[0], SMOOTH_TIME, deltaTime);
-        const smoothY = smoothDamp(currentPos[1], target[1], state.velocity[1], SMOOTH_TIME, deltaTime);
-        position = [smoothX.value, smoothY.value];
-        state.velocity = [smoothX.velocity, smoothY.velocity];
-      }
+      const position = target;
 
       state.lastInterpolatedPosition = position;
 
