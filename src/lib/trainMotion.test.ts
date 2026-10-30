@@ -210,3 +210,13 @@ describe('production regressions', () => {
     expect(state.path).not.toBeNull();
   });
 });
+
+it('preserves the old approach at a station flip instead of shortcutting a junction',()=>{
+ const train=makeTrain({currentStation:'Paddington',timeToStation:120,destination:'Harrow & Wealdstone'});
+ const a=updateMotion(undefined,train,NOW)!;
+ const before=motionTarget(a,NOW+10_000).position;
+ const b=updateMotion(a,{...train,currentStation:'Warwick Avenue',timeToStation:120},NOW+10_000)!;
+ roughly(motionTarget(b,NOW+10_000).position,before,1e-9);
+ const after=motionTarget(b,NOW+11_000).position;
+ expect(Math.hypot((after[0]-before[0])*69000,(after[1]-before[1])*110540)).toBeLessThan(26);
+});
