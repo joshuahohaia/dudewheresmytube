@@ -423,4 +423,4 @@ export function motionTarget(
   const heading =
     before[0] === after[0] && before[1] === after[1] ? 0 : calculateHeading(before, after);
   return { position, heading };
-        }
+}
