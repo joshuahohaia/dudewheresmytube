@@ -114,7 +114,7 @@ export function TubeMap() {
 
     // Update trains
     const trainsSource = mapInstance.getSource('trains') as maplibregl.GeoJSONSource;
-    if (trainsSource && positions.length > 0) {
+    if (trainsSource) {
       trainsSource.setData(trainsToGeoJSON(positions));
     }
 
@@ -385,6 +385,7 @@ export function TubeMap() {
         <div className="bg-black/70 text-white px-3 py-2 rounded text-sm">
           {isLoading && !positions.length && <span>Loading trains...</span>}
           {error && <span className="text-red-400">Error: {error.message}</span>}
+          {trainsData?.failedLines?.length ? <span className="block text-amber-300 text-xs">TfL feed unavailable for {trainsData.failedLines.length} lines</span> : null}
           {positions.length > 0 && (
             <>
               <span className="flex items-center gap-2">
