@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { selectNearestEligibleArrivals, type TflArrival } from './train-selection';
+import { selectNearestEligibleArrivals, type TflArrival } from './train-selection.js';
 
 const LINE_IDS = [
   'bakerloo',
