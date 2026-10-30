@@ -4,6 +4,8 @@ export interface Train {
   lineName: string;
   currentStation: string;
   destination: string;
+  expectedArrival?: string;
+  timestamp?: string;
   timeToStation: number; // seconds
   direction: string;
   vehicleId: string;
