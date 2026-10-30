@@ -1,36 +1,18 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { Train, TrainWithPosition } from '../types/train';
-import { getStationCoordinates } from '../lib/stationLookup';
-import { findTrackPath, interpolateAlongPath, getLineDisplayName } from '../lib/trackGeometry';
-import type { Position } from 'geojson';
-
-interface TrainKeyframe {
-  position: [number, number];
-  timestamp: number;
-}
+import { updateMotion, motionTarget, type MotionState } from '../lib/trainMotion';
 
 interface TrainState {
-  current: TrainKeyframe;
-  previous: TrainKeyframe | null;
+  motion: MotionState;
   train: Train;
   trail: [number, number][];
-  trackPath: Position[] | null; // Path along the actual track geometry
-  lastInterpolatedPosition: [number, number] | null; // Current visual position for smooth transitions
-  velocity: [number, number]; // Current velocity for momentum-based easing
+  lastInterpolatedPosition: [number, number] | null;
+  velocity: [number, number];
 }
 
-
-// Smooth start with momentum preservation
-function easeInOutQuad(t: number): number {
-  return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
-}
-
-// Linear interpolation
-function lerp(a: number, b: number, t: number): number {
-  return a + (b - a) * t;
-}
-
-// Smooth damp - spring-like interpolation with velocity
+// Spring-like interpolation toward a moving target. The motion model decides
+// where the train should be; this only absorbs small corrections (a few
+// seconds of prediction drift, a station flip) so they don't visibly snap.
 function smoothDamp(
   current: number,
   target: number,
@@ -55,83 +37,46 @@ function smoothDamp(
   return { value: newValue, velocity: newVelocity };
 }
 
-// Calculate heading between two points
-function calculateHeading(from: [number, number], to: [number, number]): number {
-  const dLng = to[0] - from[0];
-  const dLat = to[1] - from[1];
-  const angle = Math.atan2(dLng, dLat) * (180 / Math.PI);
-  return (angle + 360) % 360;
-}
-
-const ANIMATION_DURATION = 9000; // Animate over 9 seconds (just under 10s refresh)
 const TRAIL_LENGTH = 20;
-const SMOOTH_TIME = 0.5; // Smoothing factor for velocity-based movement (seconds)
-let lastFrameTime = Date.now();
+const SMOOTH_TIME = 0.8; // seconds to absorb a correction
 
 export function useTrainPositions(trains: Train[] | undefined) {
   const [positions, setPositions] = useState<TrainWithPosition[]>([]);
   const trainStates = useRef<Map<string, TrainState>>(new Map());
-  const animationRef = useRef<number | undefined>(undefined);
+  const lastFrameTime = useRef<number>(0);
 
-  // Update train states when new data arrives
+  // Update motion models when new data arrives
   useEffect(() => {
     if (!trains) return;
 
     const now = Date.now();
 
     trains.forEach((train) => {
-      const coords = getStationCoordinates(train.currentStation);
-      if (!coords) return;
-
       const existing = trainStates.current.get(train.id);
+      const motion = updateMotion(existing?.motion, train, now);
+
+      if (!motion) {
+        // Target station not mappable; drop the marker rather than show a
+        // wrong position.
+        if (existing) trainStates.current.delete(train.id);
+        return;
+      }
 
       if (existing) {
-        // Only update if station changed or it's a new position
-        const posChanged =
-          coords[0] !== existing.current.position[0] ||
-          coords[1] !== existing.current.position[1];
-
-        if (posChanged) {
-          // Use the current interpolated position as starting point for smooth transition
-          // This prevents the train from jumping back to the previous station
-          const startPosition = existing.lastInterpolatedPosition || existing.current.position;
-
-          // Find the track path between current visual position and new station
-          const lineName = getLineDisplayName(train.lineId);
-          const trackPath = findTrackPath(
-            startPosition,
-            coords,
-            lineName
-          );
-
-          trainStates.current.set(train.id, {
-            previous: { position: startPosition, timestamp: existing.current.timestamp },
-            current: { position: coords, timestamp: now },
-            train,
-            trail: existing.trail,
-            trackPath,
-            lastInterpolatedPosition: startPosition,
-            velocity: existing.velocity, // Preserve momentum
-          });
-        } else {
-          // Same position, just update train data
-          existing.train = train;
-        }
+        existing.motion = motion;
+        existing.train = train;
       } else {
-        // New train
         trainStates.current.set(train.id, {
-          previous: null,
-          current: { position: coords, timestamp: now },
+          motion,
           train,
-          trail: [coords],
-          trackPath: null,
-          lastInterpolatedPosition: coords,
+          trail: [motion.targetCoords],
+          lastInterpolatedPosition: null,
           velocity: [0, 0],
         });
       }
     });
 
-    // Remove stale trains
+    // Remove trains that dropped out of the feed
     const currentIds = new Set(trains.map((t) => t.id));
     for (const [id] of trainStates.current.entries()) {
       if (!currentIds.has(id)) {
@@ -141,109 +86,55 @@ export function useTrainPositions(trains: Train[] | undefined) {
   }, [trains]);
 
   // Animation loop - runs at 60fps
-  const animate = useCallback(() => {
-    const now = Date.now();
-    const deltaTime = Math.min((now - lastFrameTime) / 1000, 0.1); // Cap delta to prevent jumps
-    lastFrameTime = now;
+  useEffect(() => {
+    let raf = 0;
+    lastFrameTime.current = Date.now();
+
+    const animate = () => {
+      const now = Date.now();
+    const deltaTime = Math.min((now - lastFrameTime.current) / 1000, 0.1); // Cap delta to prevent jumps
+    lastFrameTime.current = now;
 
     const result: TrainWithPosition[] = [];
 
     trainStates.current.forEach((state) => {
-      const { current, previous, train, trail, trackPath, velocity } = state;
+      const { position: target, heading } = motionTarget(state.motion, now);
 
       let position: [number, number];
-      let heading = 0;
-
-      if (previous) {
-        // Calculate animation progress
-        const elapsed = now - current.timestamp;
-        const rawProgress = Math.min(elapsed / ANIMATION_DURATION, 1);
-        const progress = easeInOutQuad(rawProgress);
-
-        // Calculate target position along track or straight line
-        let targetPosition: [number, number];
-
-        if (trackPath && trackPath.length >= 2) {
-          // Target is along the actual track geometry
-          targetPosition = interpolateAlongPath(trackPath, progress);
-
-          // Calculate heading from nearby points on the path
-          const prevProgress = Math.max(0, progress - 0.05);
-          const nextProgress = Math.min(1, progress + 0.05);
-          const prevPos = interpolateAlongPath(trackPath, prevProgress);
-          const nextPos = interpolateAlongPath(trackPath, nextProgress);
-          heading = calculateHeading(prevPos, nextPos);
-        } else {
-          // Fallback to straight line
-          targetPosition = [
-            lerp(previous.position[0], current.position[0], progress),
-            lerp(previous.position[1], current.position[1], progress),
-          ];
-
-          if (previous.position[0] !== current.position[0] ||
-              previous.position[1] !== current.position[1]) {
-            heading = calculateHeading(previous.position, current.position);
-          }
-        }
-
-        // Apply velocity-based smooth damping for fluid motion
-        const currentPos = state.lastInterpolatedPosition || previous.position;
-
-        const smoothX = smoothDamp(
-          currentPos[0],
-          targetPosition[0],
-          velocity[0],
-          SMOOTH_TIME,
-          deltaTime
-        );
-
-        const smoothY = smoothDamp(
-          currentPos[1],
-          targetPosition[1],
-          velocity[1],
-          SMOOTH_TIME,
-          deltaTime
-        );
-
+      const currentPos = state.lastInterpolatedPosition;
+      if (!currentPos) {
+        position = target;
+        state.velocity = [0, 0];
+      } else {
+        const smoothX = smoothDamp(currentPos[0], target[0], state.velocity[0], SMOOTH_TIME, deltaTime);
+        const smoothY = smoothDamp(currentPos[1], target[1], state.velocity[1], SMOOTH_TIME, deltaTime);
         position = [smoothX.value, smoothY.value];
         state.velocity = [smoothX.velocity, smoothY.velocity];
+      }
 
-        // Store current position for smooth transitions when new data arrives
-        state.lastInterpolatedPosition = position;
+      state.lastInterpolatedPosition = position;
 
-        // Update trail
-        const lastTrailPos = trail[trail.length - 1];
-        const dist = Math.abs(position[0] - lastTrailPos[0]) + Math.abs(position[1] - lastTrailPos[1]);
-        if (dist > 0.00003) {
-          state.trail = [...trail, position].slice(-TRAIL_LENGTH);
-        }
-      } else {
-        // New train, no animation yet
-        position = current.position;
-        state.lastInterpolatedPosition = position;
-        state.velocity = [0, 0];
+      // Update trail
+      const lastTrailPos = state.trail[state.trail.length - 1];
+      const dist = Math.abs(position[0] - lastTrailPos[0]) + Math.abs(position[1] - lastTrailPos[1]);
+      if (dist > 0.00003) {
+        state.trail = [...state.trail, position].slice(-TRAIL_LENGTH);
       }
 
       result.push({
-        ...train,
+        ...state.train,
         position,
         heading,
       });
     });
 
-    setPositions(result);
-    animationRef.current = requestAnimationFrame(animate);
-  }, []);
-
-  // Start animation loop
-  useEffect(() => {
-    animationRef.current = requestAnimationFrame(animate);
-    return () => {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
+      setPositions(result);
+      raf = requestAnimationFrame(animate);
     };
-  }, [animate]);
+
+    raf = requestAnimationFrame(animate);
+    return () => cancelAnimationFrame(raf);
+  }, []);
 
   // Get trails for rendering
   const getTrails = useCallback(() => {
