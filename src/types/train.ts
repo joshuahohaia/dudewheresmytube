@@ -20,5 +20,7 @@ export interface TrainsResponse {
   timestamp: number;
   cached: boolean;
   count?: number;
+  /** Lines whose upstream TfL fetch failed; empty means the feed is complete. */
+  failedLines?: string[];
   error?: string;
 }
