@@ -35,6 +35,8 @@ interface Train {
   lineName: string;
   currentStation: string;
   destination: string;
+  expectedArrival?: string;
+  timestamp?: string;
   timeToStation: number;
   direction: string;
   vehicleId: string;
@@ -66,6 +68,8 @@ async function fetchLineData(lineId: string): Promise<LineResult> {
       currentStation: (arrival.stationName || 'Unknown').replace(' Underground Station', ''),
       destination: (arrival.destinationName || 'Unknown').replace(' Underground Station', ''),
       timeToStation: arrival.timeToStation,
+      expectedArrival: arrival.expectedArrival,
+      timestamp: arrival.timestamp,
       direction: arrival.direction || '',
       vehicleId: arrival.vehicleId,
       naptanId: arrival.naptanId || '',

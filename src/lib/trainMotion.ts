@@ -12,7 +12,7 @@ import { getLineDisplayName } from './trackGeometry';
  * stations. This module derives an estimated between-station position from
  * that countdown: the train is placed along the real track geometry at the
  * distance an average-speed train would cover in the remaining time, so it
- * glides toward the station and arrives when the countdown reaches zero.
+ * glides toward the station. Corrections are limited to plausible speed.
  *
  * Everything between stations is an estimate. Arrival at the target station
  * is anchored to the feed's prediction; a train whose countdown has elapsed
@@ -31,7 +31,7 @@ const MAX_BACKTRACK_METERS = 4000;
 const SNAP_TOLERANCE_DEG = 0.006;
 // Same-target countdown updates within this tolerance are treated as feed
 // noise and ignored, so markers don't stutter on every poll.
-const ARRIVAL_JITTER_SECONDS = 15;
+const ARRIVAL_JITTER_SECONDS = 2;
 
 export interface MotionTrain {
   id: string;
@@ -39,6 +39,8 @@ export interface MotionTrain {
   currentStation: string;
   destination: string;
   timeToStation: number;
+  expectedArrival?: string;
+  naptanId?: string;
 }
 
 export interface MotionState {
@@ -55,6 +57,8 @@ export interface MotionState {
   arrivalTime: number;
   receivedAt: number;
   destination: string;
+  startedAt: number;
+  startMeters: number;
   /** Furthest-back station of the estimated path (mainly for tests/debug). */
   originStation: string | null;
 }
@@ -98,6 +102,7 @@ function buildLineGraphs() {
   const lineFeatures = (linesData as FeatureCollection<LineString>).features;
   const stationFeatures = (stationsData as FeatureCollection<Point>).features;
 
+  const stationsById = new Map(stationFeatures.map(f => [f.properties?.id, { name: f.properties?.name as string, coords: f.geometry.coordinates as [number, number] }]));
   const stationsByLine = new Map<string, StationRef[]>();
   for (const feature of stationFeatures) {
     const name = feature.properties?.name;
@@ -130,8 +135,13 @@ function buildLineGraphs() {
         graph = { stations, adj: new Map() };
         lineGraphs.set(line.name, graph);
       }
-      const a = nearestStation(stations, coords[0]);
-      const b = nearestStation(stations, coords[coords.length - 1]);
+      // The GeoJSON includes authoritative endpoint IDs. Nearest-coordinate
+      // guesses confuse nearby interchange stations and disconnect whole branches.
+      const start = stationsById.get(line.start_sid);
+      const end = stationsById.get(line.end_sid);
+      const firstIsStart = start && end && distanceDeg(start.coords, coords[0]) <= distanceDeg(end.coords, coords[0]);
+      const a = start && end ? { name: firstIsStart ? start.name : end.name, dist: 0 } : nearestStation(stations, coords[0]);
+      const b = start && end ? { name: firstIsStart ? end.name : start.name, dist: 0 } : nearestStation(stations, coords[coords.length - 1]);
       if (!a || !b) continue;
       if (a.dist > SNAP_TOLERANCE_DEG || b.dist > SNAP_TOLERANCE_DEG) continue;
       if (a.name === b.name) continue;
@@ -329,68 +339,78 @@ export function updateMotion(
   now: number
 ): MotionState | null {
   const lineName = getLineDisplayName(train.lineId);
-  const targetCoords = getStationCoordinates(train.currentStation);
-  if (!targetCoords) return existing ?? null;
+  const station = (stationsData as FeatureCollection<Point>).features.find(f => f.properties?.id === train.naptanId);
+  const targetStation = station?.properties?.name as string || train.currentStation;
+  const targetCoords = station?.geometry.coordinates as [number, number] || getStationCoordinates(targetStation);
+  if (!targetCoords) return null;
+  const absolute = Date.parse(train.expectedArrival || '');
+  const arrivalTime = Number.isFinite(absolute) ? absolute : now + Math.max(0, train.timeToStation) * 1000;
+  const tts = Math.max(0, (arrivalTime - now) / 1000);
 
-  const tts = Math.max(0, train.timeToStation);
-
-  if (existing && existing.targetStation === train.currentStation && existing.lineName === lineName) {
-    // Same target station. Small countdown differences between polls are feed
-    // noise; larger ones are real corrections (held train, re-attributed
-    // prediction) and are adopted.
-    const oldRemaining = Math.max(0, (existing.arrivalTime - now) / 1000);
-    const arrivalTime =
-      Math.abs(tts - oldRemaining) <= ARRIVAL_JITTER_SECONDS
-        ? existing.arrivalTime
-        : now + tts * 1000;
-    return { ...existing, arrivalTime, receivedAt: now, destination: train.destination };
+  if (existing && existing.targetStation === targetStation && existing.lineName === lineName) {
+    // Keep the already displayed progress. Delayed trains slow/hold rather than
+    // reverse along the track; early predictions adjust the remaining journey.
+    const progress = progressMeters(existing, now);
+    const corrected = Math.abs(arrivalTime - existing.arrivalTime) > ARRIVAL_JITTER_SECONDS * 1000;
+    return { ...existing, arrivalTime: corrected ? arrivalTime : existing.arrivalTime,
+      startMeters: corrected ? progress : existing.startMeters,
+      startedAt: corrected ? now : existing.startedAt, receivedAt: now, destination: train.destination };
   }
 
-  let path: Position[] | null = null;
-  let cumMeters: number[] = [];
-  let totalMeters = 0;
-  let originStation: string | null = null;
-
+  const chain = buildChain(lineName, targetStation, train.destination, tts * AVG_SPEED_MPS);
+  let built = chain ? snapEndpoints(chain, getStationCoordinates(chain.originStation), targetCoords) : null;
+  let originStation = chain?.originStation || null;
   if (existing && existing.lineName === lineName) {
-    // The prediction moved to the next station: the train is coming from the
-    // station it was approaching. Route from there to the new target.
-    const route = routeStations(lineName, existing.targetStation, train.currentStation);
-    const built = route && route.length >= 2 ? routePath(lineGraphs.get(lineName)!, route) : null;
-    if (built) {
-      originStation = existing.targetStation;
-      const snapped = snapEndpoints(built, getStationCoordinates(originStation), targetCoords);
-      path = snapped.path;
-      cumMeters = snapped.cumMeters;
-      totalMeters = snapped.totalMeters;
+    // Include the old route, so an early station flip need not teleport a train
+    // to the old target. It may still be approaching that station.
+    const route = routeStations(lineName, existing.targetStation, targetStation);
+    const onward = route && route.length > 1 ? routePath(lineGraphs.get(lineName)!, route) : null;
+    if (onward) {
+      originStation = existing.originStation || existing.targetStation;
+      // Keep the previous approach as a prefix. Shortest origin-to-new-target
+      // routes can skip the train's actual displayed position at junctions.
+      const previousProgress = progressMeters(existing, now);
+      const index = existing.cumMeters.findIndex(m => m > previousProgress);
+      const suffix = existing.path && index >= 0 ? existing.path.slice(index) : [];
+      const previousPosition = motionTarget(existing, now).position;
+      const joined = existing.path ? [previousPosition, ...suffix, ...onward.path.slice(1)] : onward.path;
+      const cumulative = [0];
+      for(let i=1;i<joined.length;i++) cumulative.push(cumulative[i-1]+metersBetween(joined[i-1],joined[i]));
+      built = snapEndpoints({path:joined,cumMeters:cumulative,totalMeters:cumulative[cumulative.length-1]},null,targetCoords);
     }
   }
-
-  if (!path) {
-    // New train (or unknown origin): walk back from the target against the
-    // direction of travel so a long countdown starts further up the line.
-    const chain = buildChain(lineName, train.currentStation, train.destination, tts * AVG_SPEED_MPS);
-    if (chain) {
-      originStation = chain.originStation;
-      const snapped = snapEndpoints(chain, getStationCoordinates(originStation), targetCoords);
-      path = snapped.path;
-      cumMeters = snapped.cumMeters;
-      totalMeters = snapped.totalMeters;
+  const path = built?.path || null;
+  const cumMeters = built?.cumMeters || [];
+  const totalMeters = built?.totalMeters || 0;
+  let startMeters = Math.max(0, totalMeters - tts * AVG_SPEED_MPS);
+  if (existing && path) {
+    const previous = motionTarget(existing, now).position;
+    let best = Infinity;
+    // Project onto the track, never interpolate a straight chord across town.
+    for (let i = 1; i < path.length; i++) {
+      const a = path[i - 1], b = path[i];
+      const cos = Math.cos(previous[1] * Math.PI / 180);
+      const dx = (b[0] - a[0]) * cos, dy = b[1] - a[1];
+      const t = Math.max(0, Math.min(1, (((previous[0]-a[0])*cos)*dx + (previous[1]-a[1])*dy) / (dx*dx+dy*dy || 1)));
+      const projected: Position = [a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t];
+      const distance = metersBetween(previous, projected);
+      if(distance < best) { best = distance; startMeters = cumMeters[i-1] + t*(cumMeters[i]-cumMeters[i-1]); }
     }
+    // A different branch/direction is a re-location, not a 1000m/s journey.
+    // Reset the estimate at its new plausible position rather than fly off-track.
+    if(best > 150) startMeters = Math.max(0, totalMeters-tts*AVG_SPEED_MPS);
   }
+  return {trainId: train.id, lineName, targetStation, targetCoords, path, cumMeters,
+    totalMeters, arrivalTime, receivedAt: now, destination: train.destination,
+    originStation, startMeters, startedAt: now};
+}
 
-  return {
-    trainId: train.id,
-    lineName,
-    targetStation: train.currentStation,
-    targetCoords,
-    path,
-    cumMeters,
-    totalMeters,
-    arrivalTime: now + tts * 1000,
-    receivedAt: now,
-    destination: train.destination,
-    originStation,
-  };
+function progressMeters(state: MotionState, now: number): number {
+  // Do not keep fabricating motion indefinitely if updates stop.
+  const at = Math.min(now, state.receivedAt + 90_000);
+  const duration = Math.max(1000, state.arrivalTime - state.startedAt, (state.totalMeters-state.startMeters)/25*1000);
+  const progress = Math.max(0, Math.min(1, (at - state.startedAt) / duration));
+  return state.startMeters + (state.totalMeters - state.startMeters) * progress;
 }
 
 /**
@@ -405,9 +425,7 @@ export function motionTarget(
   if (!state.path || state.totalMeters <= 0) {
     return { position: state.targetCoords, heading: 0 };
   }
-  const remainingSec = Math.max(0, (state.arrivalTime - now) / 1000);
-  const covered = state.totalMeters - remainingSec * AVG_SPEED_MPS;
-  const clamped = Math.min(Math.max(covered, 0), state.totalMeters);
+  const clamped = progressMeters(state, now);
   const position = interpolateAtMeters(state.path, state.cumMeters, clamped);
   const before = interpolateAtMeters(state.path, state.cumMeters, Math.max(0, clamped - 15));
   const after = interpolateAtMeters(state.path, state.cumMeters, Math.min(state.totalMeters, clamped + 15));

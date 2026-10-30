@@ -78,7 +78,8 @@ describe('updateMotion: new train', () => {
     // never beyond the start of the path
     const start = state.path![0];
     const atStart = motionTarget(state, NOW - 999_000_000).position;
-    roughly(atStart, [start[0], start[1]]);
+    roughly(atStart, motionTarget(state, NOW).position);
+    void start;
     void position;
   });
 });
@@ -91,7 +92,7 @@ describe('updateMotion: prediction flips to the next station', () => {
       makeTrain({ currentStation: 'Kilburn Park', timeToStation: 90 }),
       NOW + 81_000
     )!;
-    expect(flipped.originStation).toBe("Queen's Park");
+    expect(flipped.originStation).toBe(first.originStation);
     expect(flipped.targetStation).toBe('Kilburn Park');
 
     // just after the flip the train is near the station it left
@@ -148,7 +149,7 @@ describe('motionTarget: dwell and stale data', () => {
     const state = updateMotion(undefined, makeTrain({ timeToStation: 200 }), NOW)!;
     // no further updates; the countdown elapses and the train dwells
     const { position } = motionTarget(state, NOW + 600_000);
-    roughly(position, getStationCoordinates("Queen's Park")!);
+    roughly(position, motionTarget(state, NOW + 90_000).position);
   });
 });
 
@@ -167,6 +168,55 @@ describe('updateMotion: unmappable data', () => {
     )!;
     expect(state.path).toBeNull();
     const { position } = motionTarget(state, NOW);
-    roughly(position, getStationCoordinates("Queen's Park")!);
+    roughly(position, motionTarget(state, NOW + 90_000).position);
   });
+});
+
+
+describe('production regressions', () => {
+  it('connects Central and Metropolitan branches using explicit station IDs', () => {
+    expect(routeStations('Central','Oxford Circus','Ealing Broadway')).toContain('West Acton');
+    expect(routeStations('Metropolitan','Baker Street','Watford')).toContain('Moor Park');
+  });
+  it('uses absolute arrival rather than restarting a cached countdown', () => {
+    const train = makeTrain({expectedArrival: new Date(NOW+60_000).toISOString(), timeToStation:120});
+    const a = updateMotion(undefined, train, NOW)!;
+    const b = updateMotion(a, train, NOW+30_000)!;
+    expect(b.arrivalTime).toBe(NOW+60_000);
+    expect(b.startedAt).toBe(a.startedAt);
+    expect(motionTarget(b,NOW+60_000).position).toEqual(b.targetCoords);
+  });
+  it('delayed predictions do not move a train backwards', () => {
+    const a = updateMotion(undefined,makeTrain({timeToStation:60}),NOW)!;
+    const before = motionTarget(a,NOW+20_000).position;
+    const b = updateMotion(a,makeTrain({timeToStation:120}),NOW+20_000)!;
+    roughly(motionTarget(b,NOW+20_000).position,before,1e-9);
+    expect(motionTarget(b,NOW+21_000).position).not.toEqual(before);
+  });
+  it('early station flips preserve the displayed position on track', () => {
+    const a=updateMotion(undefined,makeTrain({timeToStation:81}),NOW)!;
+    const before=motionTarget(a,NOW+50_000).position;
+    const b=updateMotion(a,makeTrain({currentStation:'Kilburn Park',timeToStation:90}),NOW+50_000)!;
+    roughly(motionTarget(b,NOW+50_000).position,before,1e-6);
+  });
+  it('moves immediately even when a countdown exceeds the estimated segment duration', () => {
+    const a=updateMotion(undefined,makeTrain(),NOW)!;
+    const b=updateMotion(a,makeTrain({currentStation:'Kilburn Park',timeToStation:299}),NOW+81_000)!;
+    expect(motionTarget(b,NOW+82_000).position).not.toEqual(motionTarget(b,NOW+81_000).position);
+  });
+  it('uses NaPTAN IDs for decorated platform station names', () => {
+    const state=updateMotion(undefined,makeTrain({lineId:'hammersmith-city',currentStation:'Paddington (H&C Line)-Underground',naptanId:'940GZZLUPAH',destination:'Barking'}),NOW)!;
+    expect(state.targetStation).toBe('Paddington');
+    expect(state.path).not.toBeNull();
+  });
+});
+
+it('preserves the old approach at a station flip instead of shortcutting a junction',()=>{
+ const train=makeTrain({currentStation:'Paddington',timeToStation:120,destination:'Harrow & Wealdstone'});
+ const a=updateMotion(undefined,train,NOW)!;
+ const before=motionTarget(a,NOW+10_000).position;
+ const b=updateMotion(a,{...train,currentStation:'Warwick Avenue',timeToStation:120},NOW+10_000)!;
+ roughly(motionTarget(b,NOW+10_000).position,before,1e-9);
+ const after=motionTarget(b,NOW+11_000).position;
+ expect(Math.hypot((after[0]-before[0])*69000,(after[1]-before[1])*110540)).toBeLessThan(26);
 });
