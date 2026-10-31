@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import type { Train, TrainWithPosition } from '../types/train';
-import { updateMotion, motionTarget, type MotionState } from '../lib/trainMotion';
+import { updateMotion, motionTarget, motionStatus, type MotionState } from '../lib/trainMotion';
 
 const TRAIL_LENGTH = 20;
 
@@ -12,7 +12,7 @@ interface TrainState {
   seenAt: number;
 }
 
-export function useTrainPositions(trains: Train[] | undefined) {
+export function useTrainPositions(trains: Train[] | undefined, dataUpdatedAt?: number) {
   const [positions, setPositions] = useState<TrainWithPosition[]>([]);
   const trainStates = useRef<Map<string, TrainState>>(new Map());
 
@@ -55,7 +55,7 @@ export function useTrainPositions(trains: Train[] | undefined) {
         trainStates.current.delete(id);
       }
     }
-  }, [trains]);
+  }, [trains, dataUpdatedAt]);
 
   // Animation loop - runs at 60fps
   useEffect(() => {
@@ -71,6 +71,7 @@ export function useTrainPositions(trains: Train[] | undefined) {
       const { position: target, heading } = motionTarget(state.motion, now);
 
       const position = target;
+      const status = motionStatus(state.motion, now);
 
       state.lastInterpolatedPosition = position;
 
@@ -84,7 +85,9 @@ export function useTrainPositions(trains: Train[] | undefined) {
       result.push({
         ...state.train,
         position,
-        timeToStation: Math.max(0, Math.ceil((state.motion.arrivalTime - now) / 1000)),
+        timeToStation: Math.max(0, Math.ceil((status.arrivalTime - now) / 1000)),
+        estimatedTarget: status.target,
+        predictionStale: status.stale,
         heading,
       });
     });

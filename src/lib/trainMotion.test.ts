@@ -220,3 +220,54 @@ it('preserves the old approach at a station flip instead of shortcutting a junct
  const after=motionTarget(b,NOW+11_000).position;
  expect(Math.hypot((after[0]-before[0])*69000,(after[1]-before[1])*110540)).toBeLessThan(26);
 });
+
+// Explicit downstream prediction horizon, not blind velocity extrapolation.
+describe('prediction horizon',()=>{
+ const now=NOW;
+ const train=makeTrain({currentStation:"Queen's Park",naptanId:'940GZZLUQPS',timeToStation:10,expectedArrival:new Date(now+10000).toISOString(),timestamp:new Date(now).toISOString(),predictions:[{station:'Kilburn Park',naptanId:'940GZZLUKPK',expectedArrival:new Date(now+80000).toISOString()}]});
+ it('holds a conservative dwell then moves on only along the predicted next leg',()=>{
+  const state=updateMotion(undefined,train,now)!;expect(state.future).toHaveLength(1);
+  const station=getStationCoordinates("Queen's Park")!;
+  roughly(motionTarget(state,now+15000).position,station);
+  roughly(motionTarget(state,now+29000).position,station);
+  expect(motionTarget(state,now+40000).position).not.toEqual(station);
+ });
+ it('does not invent an onward leg for absent, disconnected or skipped-stop predictions',()=>{
+  const a=updateMotion(undefined,{...train,predictions:[]},now)!;expect(a.future).toHaveLength(0);
+  const b=updateMotion(undefined,{...train,predictions:[{station:'Oxford Circus',naptanId:'940GZZLUOXC',expectedArrival:new Date(now+80000).toISOString()}]},now)!;expect(b.future).toHaveLength(0);
+  const c=updateMotion(undefined,{...train,predictions:[{station:'Atlantis',naptanId:'unknown',expectedArrival:new Date(now+80000).toISOString()}]},now)!;expect(c.future).toHaveLength(0);
+ });
+ it('freezes the entire plan when source predictions are90s old, even after cached re-fetch',()=>{
+  const a=updateMotion(undefined,train,now)!;
+  const b=updateMotion(a,train,now+60000)!;
+  roughly(motionTarget(b,now+91000).position,motionTarget(b,now+200000).position,1e-9);
+ });
+ it('does not reverse an active onward leg when the same cached nearest record repeats',()=>{
+  const a=updateMotion(undefined,train,now)!;
+  const before=motionTarget(a,now+45000).position;
+  const b=updateMotion(a,train,now+45000)!;
+  roughly(motionTarget(b,now+45000).position,before,1e-9);
+  expect(b).toBe(a);
+ });
+ it('reconciles a new station prediction without jumping at the handoff',()=>{
+  const a=updateMotion(undefined,train,now)!;
+  const before=motionTarget(a,now+45000).position;
+  const b=updateMotion(a,{...train,currentStation:'Kilburn Park',naptanId:'940GZZLUKPK',expectedArrival:new Date(now+95000).toISOString(),predictions:[]},now+45000)!;
+  roughly(motionTarget(b,now+45000).position,before,1e-9);
+ });
+});
+
+it('does not rebuild a cached plan or reset its estimated dwell',()=>{
+ const t=makeTrain({timestamp:new Date(NOW).toISOString(),expectedArrival:new Date(NOW+10000).toISOString()});
+ const a=updateMotion(undefined,t,NOW)!;
+ expect(updateMotion(a,t,NOW+100000)).toBe(a);
+});
+it('waits for a speed-limited approach to finish before its onward dwell',()=>{
+ const old=updateMotion(undefined,makeTrain({currentStation:"Queen's Park",timeToStation:200}),NOW)!;
+ const t=makeTrain({currentStation:"Queen's Park",naptanId:'940GZZLUQPS',timestamp:new Date(NOW).toISOString(),expectedArrival:new Date(NOW+1000).toISOString(),predictions:[{station:'Kilburn Park',naptanId:'940GZZLUKPK',expectedArrival:new Date(NOW+250000).toISOString()}]});
+ const a=updateMotion(old,t,NOW)!;
+ expect(a.future).toHaveLength(1);
+ const next=a.future![0];
+ expect(next.startedAt).toBeGreaterThan(NOW+21000);
+ roughly(motionTarget(a,next.startedAt-1).position,motionTarget(a,next.startedAt).position,1e-6);
+});
