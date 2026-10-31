@@ -88,7 +88,7 @@ export function TubeMap() {
   const mapLoaded = useRef(false);
 
   const { data: trainsData, isLoading, error, dataUpdatedAt, isFetching } = useTrains();
-  const { positions, getTrails } = useTrainPositions(trainsData?.trains);
+  const { positions, getTrails } = useTrainPositions(trainsData?.trains, dataUpdatedAt);
 
   // Countdown timer state
   const [timeInfo, setTimeInfo] = useState({ sinceLast: 0, untilNext: 10 });
