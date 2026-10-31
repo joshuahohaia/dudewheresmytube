@@ -17,8 +17,9 @@ import { getLineDisplayName } from './trackGeometry';
  *
  * Everything between stations is an estimate. Arrival at the target station
  * is anchored to the feed's prediction; a train whose countdown has elapsed
- * waits at the station (dwell) until the feed moves it on, so the model never
- * invents a departure.
+ * waits at the station unless the same feed includes a directly connected
+ * downstream prediction. In that case a labelled estimated dwell precedes
+ * onward motion; this is not an observed departure.
  */
 
 // Average line speed including intermediate dwell (~32 km/h). Used only to
@@ -413,16 +414,18 @@ function updateSingleMotion(
 /** Plan only immediate, explicitly predicted next stops. A 20s dwell is an
  * estimate, never a claim that TfL reported a departure. Unknown branches stop. */
 export function updateMotion(existing: MotionState | undefined, train: MotionTrain, now: number): MotionState | null {
+  const sourceAt = Date.parse(train.timestamp || '');
+  // An identical source snapshot must not restart dwell or undo its own plan.
+  if (existing && Number.isFinite(sourceAt) && existing.sourceAt === sourceAt) return existing;
   const active = existing ? activeMotion(existing, now).state : undefined;
   // A cached nearest-stop record can lag behind our already active predicted
   // leg. Do not reverse to that old stop if the same feed confirms this leg.
   const continuing = active && Date.parse(train.expectedArrival || '') < now
-    ? train.predictions?.find(p => p.naptanId && p.station === active.targetStation) : undefined;
+    ? train.predictions?.find(p => p.naptanId && (stationsData as FeatureCollection<Point>).features.some(f => f.properties?.id === p.naptanId && f.properties?.name === active.targetStation)) : undefined;
   if (continuing) train = {...train, currentStation:continuing.station, naptanId:continuing.naptanId,
     expectedArrival:continuing.expectedArrival, predictions:train.predictions?.filter(p => Date.parse(p.expectedArrival) > Date.parse(continuing.expectedArrival))};
   const base = updateSingleMotion(active ? {...active, future: undefined} : undefined, train, now);
   if (!base) return null;
-  const sourceAt = Date.parse(train.timestamp || '');
   base.sourceAt = Number.isFinite(sourceAt) ? sourceAt : undefined;
   base.future = [];
   if (!Number.isFinite(sourceAt) || now - sourceAt > 90_000 || sourceAt > now + 5000) return base;
@@ -434,7 +437,9 @@ export function updateMotion(existing: MotionState | undefined, train: MotionTra
     const route = name ? routeStations(base.lineName, previous.targetStation, name) : null;
     // Require a directly connected next station. No skipped stops or inferred fork.
     if (!name || !route || route.length !== 2 || !Number.isFinite(arrival)) break;
-    const departure = Math.max(now, previous.arrivalTime + 20_000);
+    // A speed-limited late approach must finish before dwell begins.
+    const reachedAt = previous.startedAt + Math.max(1000, previous.arrivalTime - previous.startedAt, (previous.totalMeters - previous.startMeters) / 25 * 1000);
+    const departure = Math.max(now, reachedAt + 20_000);
     if (arrival <= departure || arrival > now + 300_000) break;
     const next = updateSingleMotion({...previous, future:undefined}, {...train,currentStation:name,naptanId:prediction.naptanId,expectedArrival:prediction.expectedArrival,predictions:undefined}, departure);
     if (!next?.path) break;
@@ -473,7 +478,7 @@ function progressMeters(state: MotionState, now: number): number {
 /**
  * Estimated position and heading at a moment in time. Between stations this
  * is a countdown-based estimate; at the end of the countdown the train holds
- * at the station until the feed advances it.
+ * at the station unless an explicit downstream prediction supplies an onward leg.
  */
 export function motionTarget(
   state: MotionState,
@@ -492,4 +497,4 @@ export function motionTarget(
   const heading =
     before[0] === after[0] && before[1] === after[1] ? 0 : calculateHeading(before, after);
   return { position, heading };
-          }
+}
