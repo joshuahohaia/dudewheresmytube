@@ -50,6 +50,8 @@ function trainsToGeoJSON(trains: TrainWithPosition[]): FeatureCollection<Point> 
         destination: train.destination,
         timeToStation: train.timeToStation,
         heading: train.heading,
+        target: train.estimatedTarget || train.currentStation,
+        predictionStale: !!train.predictionStale,
         color: LINE_COLORS[train.lineName] || '#888888',
       },
       geometry: {
@@ -347,7 +349,7 @@ export function TubeMap() {
               <div style="color: #333; font-size: 13px;">
                 <div>→ ${props?.destination}</div>
                 <div style="color: #666; font-size: 11px; margin-top: 2px;">
-                  est. ${props?.timeToStation}s to next station
+                  ${props?.predictionStale ? 'Last known estimate (prediction stale)' : `est. ${props?.timeToStation}s to ${props?.target}`}
                 </div>
               </div>
             </div>
@@ -386,6 +388,7 @@ export function TubeMap() {
           {isLoading && !positions.length && <span>Loading trains...</span>}
           {error && <span className="text-red-400">Error: {error.message}</span>}
           {trainsData?.failedLines?.length ? <span className="block text-amber-300 text-xs">TfL feed unavailable for {trainsData.failedLines.length} lines</span> : null}
+          {positions.some(p => p.predictionStale) && <span className="block text-amber-300 text-xs">Some predictions are stale; those estimates are held</span>}
           {positions.length > 0 && (
             <>
               <span className="flex items-center gap-2">
@@ -393,7 +396,7 @@ export function TubeMap() {
                 {positions.length} trains {error ? '(last known)' : 'live'}
               </span>
               <span className="block text-[11px] text-gray-400 mt-1">
-                Between-station positions are estimates
+                Movement and station departures are estimates
               </span>
             </>
           )}
