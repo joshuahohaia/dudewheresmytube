@@ -12,7 +12,7 @@ interface TrainState {
   seenAt: number;
 }
 
-export function useTrainPositions(trains: Train[] | undefined) {
+export function useTrainPositions(trains: Train[] | undefined, dataUpdatedAt?: number) {
   const [positions, setPositions] = useState<TrainWithPosition[]>([]);
   const trainStates = useRef<Map<string, TrainState>>(new Map());
 
@@ -55,7 +55,7 @@ export function useTrainPositions(trains: Train[] | undefined) {
         trainStates.current.delete(id);
       }
     }
-  }, [trains]);
+  }, [trains, dataUpdatedAt]);
 
   // Animation loop - runs at 60fps
   useEffect(() => {
