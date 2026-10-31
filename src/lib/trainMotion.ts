@@ -1,3 +1,4 @@
+import type { StationPrediction } from '../types/train';
 import linesData from '../data/tfl_lines.json';
 import stationsData from '../data/tfl_stations.json';
 import type { FeatureCollection, LineString, Point, Position } from 'geojson';
@@ -41,6 +42,8 @@ export interface MotionTrain {
   timeToStation: number;
   expectedArrival?: string;
   naptanId?: string;
+  timestamp?: string;
+  predictions?: StationPrediction[];
 }
 
 export interface MotionState {
@@ -61,6 +64,8 @@ export interface MotionState {
   startMeters: number;
   /** Furthest-back station of the estimated path (mainly for tests/debug). */
   originStation: string | null;
+  future?: MotionState[];
+  sourceAt?: number;
 }
 
 interface StationRef {
@@ -333,7 +338,7 @@ function calculateHeading(from: [number, number], to: [number, number]): number 
  * Create or update the motion model for a train when a feed poll arrives.
  * Returns null when the target station can't be placed on the map.
  */
-export function updateMotion(
+function updateSingleMotion(
   existing: MotionState | undefined,
   train: MotionTrain,
   now: number
@@ -405,9 +410,61 @@ export function updateMotion(
     originStation, startMeters, startedAt: now};
 }
 
+/** Plan only immediate, explicitly predicted next stops. A 20s dwell is an
+ * estimate, never a claim that TfL reported a departure. Unknown branches stop. */
+export function updateMotion(existing: MotionState | undefined, train: MotionTrain, now: number): MotionState | null {
+  const active = existing ? activeMotion(existing, now).state : undefined;
+  // A cached nearest-stop record can lag behind our already active predicted
+  // leg. Do not reverse to that old stop if the same feed confirms this leg.
+  const continuing = active && Date.parse(train.expectedArrival || '') < now
+    ? train.predictions?.find(p => p.naptanId && p.station === active.targetStation) : undefined;
+  if (continuing) train = {...train, currentStation:continuing.station, naptanId:continuing.naptanId,
+    expectedArrival:continuing.expectedArrival, predictions:train.predictions?.filter(p => Date.parse(p.expectedArrival) > Date.parse(continuing.expectedArrival))};
+  const base = updateSingleMotion(active ? {...active, future: undefined} : undefined, train, now);
+  if (!base) return null;
+  const sourceAt = Date.parse(train.timestamp || '');
+  base.sourceAt = Number.isFinite(sourceAt) ? sourceAt : undefined;
+  base.future = [];
+  if (!Number.isFinite(sourceAt) || now - sourceAt > 90_000 || sourceAt > now + 5000) return base;
+  let previous = base;
+  for (const prediction of (train.predictions || []).slice(0, 3)) {
+    const station = (stationsData as FeatureCollection<Point>).features.find(f => f.properties?.id === prediction.naptanId);
+    const name = station?.properties?.name as string | undefined;
+    const arrival = Date.parse(prediction.expectedArrival);
+    const route = name ? routeStations(base.lineName, previous.targetStation, name) : null;
+    // Require a directly connected next station. No skipped stops or inferred fork.
+    if (!name || !route || route.length !== 2 || !Number.isFinite(arrival)) break;
+    const departure = Math.max(now, previous.arrivalTime + 20_000);
+    if (arrival <= departure || arrival > now + 300_000) break;
+    const next = updateSingleMotion({...previous, future:undefined}, {...train,currentStation:name,naptanId:prediction.naptanId,expectedArrival:prediction.expectedArrival,predictions:undefined}, departure);
+    if (!next?.path) break;
+    next.sourceAt = sourceAt;
+    base.future.push(next);
+    previous = next;
+  }
+  return base;
+}
+
+function activeMotion(state: MotionState, now: number): {state: MotionState; at: number} {
+  const cutoff = state.sourceAt === undefined ? state.receivedAt + 90_000 : state.sourceAt + 90_000;
+  const at = Math.min(now, cutoff);
+  let active = state;
+  for (const next of state.future || []) {
+    if (next.startedAt <= at) active = next;
+    else break;
+  }
+  return {state:active, at};
+}
+
+export function motionStatus(state: MotionState, now: number) {
+  const active = activeMotion(state, now).state;
+  return {target:active.targetStation, arrivalTime:active.arrivalTime,
+    stale:state.sourceAt !== undefined && now - state.sourceAt > 90_000};
+}
+
 function progressMeters(state: MotionState, now: number): number {
   // Do not keep fabricating motion indefinitely if updates stop.
-  const at = Math.min(now, state.receivedAt + 90_000);
+  const at = Math.min(now, state.sourceAt === undefined ? state.receivedAt + 90_000 : state.sourceAt + 90_000);
   const duration = Math.max(1000, state.arrivalTime - state.startedAt, (state.totalMeters-state.startMeters)/25*1000);
   const progress = Math.max(0, Math.min(1, (at - state.startedAt) / duration));
   return state.startMeters + (state.totalMeters - state.startMeters) * progress;
@@ -422,6 +479,9 @@ export function motionTarget(
   state: MotionState,
   now: number
 ): { position: [number, number]; heading: number } {
+  const active = activeMotion(state, now);
+  state = active.state;
+  now = active.at;
   if (!state.path || state.totalMeters <= 0) {
     return { position: state.targetCoords, heading: 0 };
   }
@@ -432,4 +492,4 @@ export function motionTarget(
   const heading =
     before[0] === after[0] && before[1] === after[1] ? 0 : calculateHeading(before, after);
   return { position, heading };
-}
+          }
