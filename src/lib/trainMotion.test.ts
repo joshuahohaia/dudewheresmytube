@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { updateMotion, motionTarget, routeStations, type MotionTrain } from './trainMotion';
+import { updateMotion, motionTarget, motionStatus, routeStations, type MotionTrain } from './trainMotion';
 import { getStationCoordinates } from './stationLookup';
 
 const NOW = 1_800_000_000_000;
@@ -145,11 +145,35 @@ describe('motionTarget: dwell and stale data', () => {
     }
   });
 
-  it('keeps the last predicted position when the feed goes stale', () => {
+  it('dwells at the target once the countdown elapses when the feed goes stale', () => {
     const state = updateMotion(undefined, makeTrain({ timeToStation: 200 }), NOW)!;
-    // no further updates; the countdown elapses and the train dwells
+    // no further updates; the countdown elapses at NOW+200s and the train holds
     const { position } = motionTarget(state, NOW + 600_000);
-    roughly(position, motionTarget(state, NOW + 90_000).position);
+    roughly(position, motionTarget(state, NOW + 300_000).position);
+  });
+
+  it('keeps moving toward the predicted arrival while the countdown runs, even past 90s of feed age', () => {
+    const state = updateMotion(undefined, makeTrain({ timeToStation: 200 }), NOW)!;
+    const queensPark = getStationCoordinates("Queen's Park")!;
+    const d = (p: [number, number]) => Math.hypot(p[0] - queensPark[0], p[1] - queensPark[1]);
+    expect(d(motionTarget(state, NOW + 150_000).position)).toBeLessThan(d(motionTarget(state, NOW + 60_000).position));
+  });
+
+  it('never extrapolates more than 3 minutes past the source timestamp, and still flags it stale', () => {
+    const state = updateMotion(
+      undefined,
+      makeTrain({ timeToStation: 900, timestamp: new Date(NOW - 100_000).toISOString() }),
+      NOW
+    )!;
+    // hard cap at sourceAt + 180s (NOW + 80s): positions pin there
+    const capped = motionTarget(state, NOW + 80_000).position;
+    roughly(motionTarget(state, NOW + 600_000).position, capped);
+    // but the anchored leg did advance before the cap
+    const queensPark = getStationCoordinates("Queen's Park")!;
+    const d = (p: [number, number]) => Math.hypot(p[0] - queensPark[0], p[1] - queensPark[1]);
+    expect(d(capped)).toBeLessThan(d(motionTarget(state, NOW).position));
+    // honesty: 100s-old source data is stale, whatever the motion does
+    expect(motionStatus(state, NOW).stale).toBe(true);
   });
 });
 
@@ -160,15 +184,10 @@ describe('updateMotion: unmappable data', () => {
     ).toBeNull();
   });
 
-  it('falls back to sitting at the target when the line has no geometry', () => {
-    const state = updateMotion(
-      undefined,
+  it('does not pretend a future target is the current position when geometry is unavailable', () => {
+    expect(updateMotion(undefined,
       { id: 'x-1', lineId: 'not-a-line', currentStation: "Queen's Park", destination: 'Nowhere', timeToStation: 60 },
-      NOW
-    )!;
-    expect(state.path).toBeNull();
-    const { position } = motionTarget(state, NOW);
-    roughly(position, motionTarget(state, NOW + 90_000).position);
+      NOW)).toBeNull();
   });
 });
 
@@ -270,4 +289,53 @@ it('waits for a speed-limited approach to finish before its onward dwell',()=>{
  const next=a.future![0];
  expect(next.startedAt).toBeGreaterThan(NOW+21000);
  roughly(motionTarget(a,next.startedAt-1).position,motionTarget(a,next.startedAt).position,1e-6);
+});
+
+// Real-feed regression cases captured Nov 10, 2026. These combinations are
+// present in the feed but absent from this app's geometry. Do not invent
+// coordinates at the destination while arrival is still in the future.
+it('withholds positions for unsupported cross-line or missing-extension routes',()=>{
+ for(const [lineId,currentStation,destination] of [
+  ['metropolitan','Neasden','Aldgate'],
+  ['hammersmith-city','Bayswater','Edgware Road (Circle Line)'],
+ ]) expect(updateMotion(undefined,makeTrain({lineId,currentStation,destination,timeToStation:120}),NOW)).toBeNull();
+});
+
+it('rejects timestamp regression and flags unknown/future source age honestly',()=>{
+ const a=updateMotion(undefined,makeTrain({timestamp:new Date(NOW).toISOString()}),NOW)!;
+ expect(updateMotion(a,makeTrain({timestamp:new Date(NOW-1000).toISOString()}),NOW+1000)).toBe(a);
+ const unknown=updateMotion(undefined,makeTrain(),NOW)!;
+ expect(motionStatus(unknown,NOW).stale).toBe(true);
+ expect(motionStatus(unknown,NOW).sourceAgeSeconds).toBeUndefined();
+ const future=updateMotion(undefined,makeTrain({timestamp:new Date(NOW+600000).toISOString()}),NOW)!;
+ expect(motionStatus(future,NOW).stale).toBe(true);
+ expect(motionStatus(future,NOW).held).toBe(true);
+ roughly(motionTarget(future,NOW).position,motionTarget(future,NOW+100000).position,1e-9);
+});
+
+it('connects the stored Northern extension through canonical Nine Elms ID',()=>{
+ expect(routeStations('Northern','Kennington','Battersea Power Station')).toEqual(['Kennington','Nine Elms','Battersea Power Station']);
+ const state=updateMotion(undefined,makeTrain({lineId:'northern',currentStation:'Nine Elms',naptanId:'940GZZNEUGST',destination:'Battersea Power Station',timeToStation:120,timestamp:new Date(NOW).toISOString()}),NOW)!;
+ expect(state).not.toBeNull();
+ expect(state.targetStation).toBe('Nine Elms');
+ expect(state.originStation).toBe('Kennington');
+ expect(state.totalMeters).toBeGreaterThan(1500);
+ expect(state.path!.some(p=>Math.abs(p[0]-(-0.118768215179443))<1e-8)).toBe(true);
+});
+
+it('reconstructs a complete fragmented Metropolitan leg rather than its shortest fragment',()=>{
+ const state=updateMotion(undefined,makeTrain({lineId:'metropolitan',currentStation:'Finchley Road',destination:'Aldgate',timeToStation:299}),NOW)!;
+ expect(state.originStation).toBe('Wembley Park');
+ expect(state.totalMeters).toBeGreaterThan(7000);
+ expect(state.totalMeters).toBeLessThan(8000);
+ expect(state.path!.length).toBeGreaterThan(100);
+ // These are existing geometry vertices from different fragments.
+ for(const lon of [-0.24998230166395,-0.221874425577687,-0.190819723995531]) expect(state.path!.some(p=>Math.abs(p[0]-lon)<1e-8)).toBe(true);
+});
+it('supports the official Metropolitan Willesden Green stopping route without adding Neasden',()=>{
+ expect(routeStations('Metropolitan','Willesden Green','Aldgate')).not.toBeNull();
+ expect(routeStations('Metropolitan','Neasden','Aldgate')).toBeNull();
+ const state=updateMotion(undefined,makeTrain({lineId:'metropolitan',currentStation:'Willesden Green',destination:'Aldgate',timeToStation:120}),NOW)!;
+ expect(state.targetStation).toBe('Willesden Green');
+ expect(state.totalMeters).toBeGreaterThan(3500);
 });
