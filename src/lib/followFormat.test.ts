@@ -63,7 +63,7 @@ describe('estimateSpeed', () => {
   it('averages speed across the window', () => {
     const now = 100000;
     const start: [number, number] = [-0.1418, 51.5152];
-    const end: [number, number] = [-0.1307, 51.5165];
+    const end: [number, number] = [-0.1407, 51.5153];
     const d = distanceMeters(start, end);
     const speed = estimateSpeed([
       [now - 5000, start[0], start[1]],
@@ -84,4 +84,8 @@ describe('estimateSpeed', () => {
     expect(speed!).toBeGreaterThan(5);
     expect(speed!).toBeLessThan(12);
   });
+});
+
+it('suppresses speed across a feed correction instead of presenting a teleport as train speed',()=>{
+ expect(estimateSpeed([[1000,-0.14,51.51],[2000,-0.13,51.51]])).toBeNull();
 });
