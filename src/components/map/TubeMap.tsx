@@ -92,6 +92,18 @@ export function TubeMap() {
 
   // Countdown timer state
   const [timeInfo, setTimeInfo] = useState({ sinceLast: 0, untilNext: 10 });
+
+  // Quiet stale-data indicator: a small dot instead of a persistent banner.
+  // Details open on tap and can be dismissed; per-train popups still say when
+  // a specific estimate is held on older feed data.
+  const [staleNoteDismissed, setStaleNoteDismissed] = useState(() => {
+    try {
+      return localStorage.getItem('dwmt-stale-note-dismissed') === '1';
+    } catch {
+      return false;
+    }
+  });
+  const [staleInfoOpen, setStaleInfoOpen] = useState(false);
   const REFETCH_INTERVAL = 10; // seconds
 
   useEffect(() => {
@@ -388,7 +400,36 @@ export function TubeMap() {
           {isLoading && !positions.length && <span>Loading trains...</span>}
           {error && <span className="text-red-400">Error: {error.message}</span>}
           {trainsData?.failedLines?.length ? <span className="block text-amber-300 text-xs">TfL feed unavailable for {trainsData.failedLines.length} lines</span> : null}
-          {positions.some(p => p.predictionStale) && <span className="block text-amber-300 text-xs">Some predictions are stale; those estimates are held</span>}
+          {positions.some(p => p.predictionStale) && !staleNoteDismissed && (
+            <span className="flex items-center gap-1.5 text-xs">
+              <button
+                type="button"
+                onClick={() => setStaleInfoOpen((open) => !open)}
+                className="w-2 h-2 rounded-full bg-amber-300/80 hover:bg-amber-200 shrink-0"
+                aria-label="Some estimates are stale - tap for details"
+                title="Some estimates are held on older feed data"
+              />
+              {staleInfoOpen && (
+                <span className="text-amber-200/90 text-[11px]">
+                  Some estimates are held on older feed data.
+                  <button
+                    type="button"
+                    className="ml-1 underline hover:text-amber-100"
+                    onClick={() => {
+                      try {
+                        localStorage.setItem('dwmt-stale-note-dismissed', '1');
+                      } catch {
+                        // private mode etc - dismissal just won't persist
+                      }
+                      setStaleNoteDismissed(true);
+                    }}
+                  >
+                    Don't show again
+                  </button>
+                </span>
+              )}
+            </span>
+          )}
           {positions.length > 0 && (
             <>
               <span className="flex items-center gap-2">
