@@ -8,6 +8,23 @@ html, body, #root {
   padding: 0;
 }
 
+/* The app is a full-screen map, not a scrollable document. On mobile,
+   100vh can remain the larger browser-bar-hidden height. Use the dynamic
+   viewport so the title and map controls stay inside the visible page. */
+html, body {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+.tube-app-viewport {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  height: 100dvh;
+  overflow: hidden;
+}
+
 /* Pulsing ring shown on the followed train (selection animation).
    Never animate transform here: MapLibre positions markers with a
    translate transform, so animating transform detaches the ring from
