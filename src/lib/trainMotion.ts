@@ -385,6 +385,10 @@ function updateSingleMotion(
       built = snapEndpoints({path:joined,cumMeters:cumulative,totalMeters:cumulative[cumulative.length-1]},null,targetCoords);
     }
   }
+  // An arrival prediction is not an observed station position. Unsupported
+  // line/station combinations must not snap a train to a future target.
+  // Return unavailable rather than interpolate a route we cannot establish.
+  if (!built) return null;
   const path = built?.path || null;
   const cumMeters = built?.cumMeters || [];
   const totalMeters = built?.totalMeters || 0;
