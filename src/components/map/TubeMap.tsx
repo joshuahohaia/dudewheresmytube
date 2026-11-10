@@ -525,7 +525,7 @@ export function TubeMap() {
                   )}
                 </div>
                 <div className="mt-1 text-xs text-gray-400 flex gap-3 flex-wrap">
-                  {followSpeed !== null && <span>{formatSpeed(followSpeed)} est.</span>}
+                  {!followedTrain.predictionHeld && followSpeed !== null && <span>{formatSpeed(followSpeed)} est.</span>}
                   <span>heading {compassDirection(followedTrain.heading)}</span>
                   <span className="text-gray-500">positions are estimates</span>
                   {!followedTrain.predictionStale && <span>feed {followedTrain.sourceAgeSeconds === undefined ? 'age unknown' : `${formatCountdown(followedTrain.sourceAgeSeconds)} old`}</span>}
