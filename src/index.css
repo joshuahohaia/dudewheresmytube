@@ -7,3 +7,20 @@ html, body, #root {
   margin: 0;
   padding: 0;
 }
+
+/* Pulsing ring shown on the followed train (selection animation). */
+.follow-ring {
+  width: 26px;
+  height: 26px;
+  border-radius: 9999px;
+  border: 3px solid #ffffff;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.4);
+  background: transparent;
+  pointer-events: none;
+  animation: follow-ring-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes follow-ring-pulse {
+  0%, 100% { transform: scale(0.7); opacity: 1; }
+  50% { transform: scale(1.25); opacity: 0.45; }
+}
