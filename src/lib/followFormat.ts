@@ -48,5 +48,13 @@ export function estimateSpeed(
   }
   const dt = (newest[0] - oldest[0]) / 1000;
   if (dt < 0.5) return null;
+  // A feed re-location is not a train travelling at that apparent speed.
+  // Hide the estimate until the rolling window no longer contains a jump.
+  const window = samples.filter(s => s[0] >= oldest[0]);
+  for (let i = 1; i < window.length; i++) {
+    const elapsed = (window[i][0] - window[i - 1][0]) / 1000;
+    const metres = distanceMeters([window[i - 1][1], window[i - 1][2]], [window[i][1], window[i][2]]);
+    if (elapsed > 0 && metres / elapsed > 25.5) return null;
+  }
   return distanceMeters([oldest[1], oldest[2]], [newest[1], newest[2]]) / dt;
 }
