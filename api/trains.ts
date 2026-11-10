@@ -28,7 +28,7 @@ export default async function handler(_req: VercelRequest, res: VercelResponse) 
       direction: arrival.direction || '', vehicleId: arrival.vehicleId, naptanId: arrival.naptanId || '',
     })));
     // Bounded CDN staleness. Never cache an error as a successful empty feed.
-    res.setHeader('Cache-Control', 'public, s-maxage=30, stale-while-revalidate=15');
+    res.setHeader('Cache-Control', 'public, s-maxage=10, stale-while-revalidate=5');
     res.status(200).json({ trains, timestamp: feed.timestamp, count: trains.length, failedLines: [] });
   } catch (error) {
     const failure = error instanceof FeedError ? error : new FeedError('Train feed unavailable', 15);
