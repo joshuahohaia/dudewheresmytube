@@ -8,19 +8,27 @@ html, body, #root {
   padding: 0;
 }
 
-/* Pulsing ring shown on the followed train (selection animation). */
+/* Pulsing ring shown on the followed train (selection animation).
+   Never animate transform here: MapLibre positions markers with a
+   translate transform, so animating transform detaches the ring from
+   the train. Pulse with box-shadow spread and opacity instead. */
 .follow-ring {
   width: 26px;
   height: 26px;
   border-radius: 9999px;
   border: 3px solid #ffffff;
-  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.4);
   background: transparent;
   pointer-events: none;
   animation: follow-ring-pulse 1.6s ease-in-out infinite;
 }
 
 @keyframes follow-ring-pulse {
-  0%, 100% { transform: scale(0.7); opacity: 1; }
-  50% { transform: scale(1.25); opacity: 0.45; }
+  0%, 100% {
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.4), 0 0 0 0 rgba(255, 255, 255, 0.8);
+    opacity: 1;
+  }
+  50% {
+    box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.4), 0 0 0 9px rgba(255, 255, 255, 0);
+    opacity: 0.55;
+  }
 }
