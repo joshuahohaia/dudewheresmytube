@@ -1,6 +1,5 @@
 import type { StationPrediction } from '../types/train';
-import linesData from '../data/tfl_lines.json';
-import stationsData from '../data/tfl_stations.json';
+import { motionLines as linesData, motionStations as stationsData } from './motionData';
 import type { FeatureCollection, LineString, Point, Position } from 'geojson';
 import { normalizeStationName, getStationCoordinates } from './stationLookup';
 import { getLineDisplayName } from './trackGeometry';
@@ -29,8 +28,6 @@ const AVG_SPEED_MPS = 9;
 // long (the feed caps predictions at 300s out).
 const MAX_BACKTRACK_LEGS = 6;
 const MAX_BACKTRACK_METERS = 4000;
-// Segment endpoints snap to the nearest station within this distance (degrees).
-const SNAP_TOLERANCE_DEG = 0.006;
 // Same-target countdown updates within this tolerance are treated as feed
 // noise and ignored, so markers don't stutter on every poll.
 const ARRIVAL_JITTER_SECONDS = 2;
@@ -98,77 +95,135 @@ function pathLengthMeters(path: Position[]): number {
   return total;
 }
 
-function distanceDeg(a: Position, b: Position): number {
-  return Math.hypot(a[0] - b[0], a[1] - b[1]);
-}
 
 const lineGraphs = new Map<string, LineGraph>();
 
 function buildLineGraphs() {
   const lineFeatures = (linesData as FeatureCollection<LineString>).features;
   const stationFeatures = (stationsData as FeatureCollection<Point>).features;
-
-  const stationsById = new Map(stationFeatures.map(f => [f.properties?.id, { name: f.properties?.name as string, coords: f.geometry.coordinates as [number, number] }]));
-  const stationsByLine = new Map<string, StationRef[]>();
-  for (const feature of stationFeatures) {
-    const name = feature.properties?.name;
-    const coords = feature.geometry?.coordinates as [number, number] | undefined;
-    if (!name || !coords) continue;
-    for (const line of feature.properties?.lines || []) {
-      const list = stationsByLine.get(line.name) || [];
-      if (!list.some((s) => s.name === name)) list.push({ name, coords });
-      stationsByLine.set(line.name, list);
-    }
-  }
-
-  function nearestStation(stations: StationRef[], pt: Position): { name: string; dist: number } | null {
-    let best: { name: string; dist: number } | null = null;
-    for (const s of stations) {
-      const d = distanceDeg(s.coords, pt);
-      if (!best || d < best.dist) best = { name: s.name, dist: d };
-    }
-    return best;
-  }
-
+  const stationsById = new Map(stationFeatures.map(f => [f.properties?.id as string, {
+    name: f.properties?.name as string, coords: f.geometry.coordinates as [number, number],
+  }]));
+  const byLine = new Map<string, { path: Position[]; from: string; to: string }[]>();
   for (const feature of lineFeatures) {
-    const coords = feature.geometry?.coordinates;
-    if (!coords || coords.length < 2) continue;
+    const path = feature.geometry?.coordinates;
+    if (!path || path.length < 2) continue;
     for (const line of feature.properties?.lines || []) {
-      const stations = stationsByLine.get(line.name);
-      if (!stations) continue;
-      let graph = lineGraphs.get(line.name);
-      if (!graph) {
-        graph = { stations, adj: new Map() };
-        lineGraphs.set(line.name, graph);
-      }
-      // The GeoJSON includes authoritative endpoint IDs. Nearest-coordinate
-      // guesses confuse nearby interchange stations and disconnect whole branches.
-      const start = stationsById.get(line.start_sid);
-      const end = stationsById.get(line.end_sid);
-      const firstIsStart = start && end && distanceDeg(start.coords, coords[0]) <= distanceDeg(end.coords, coords[0]);
-      const a = start && end ? { name: firstIsStart ? start.name : end.name, dist: 0 } : nearestStation(stations, coords[0]);
-      const b = start && end ? { name: firstIsStart ? end.name : start.name, dist: 0 } : nearestStation(stations, coords[coords.length - 1]);
-      if (!a || !b) continue;
-      if (a.dist > SNAP_TOLERANCE_DEG || b.dist > SNAP_TOLERANCE_DEG) continue;
-      if (a.name === b.name) continue;
-      const meters = pathLengthMeters(coords);
-      for (const [from, to] of [
-        [a.name, b.name],
-        [b.name, a.name],
-      ] as const) {
-        const edges = graph.adj.get(from) || [];
-        const reversed = from === b.name;
-        const existing = edges.find((e) => e.to === to);
-        if (existing) {
-          if (meters < existing.meters) {
-            existing.meters = meters;
-            existing.path = reversed ? [...coords].reverse() : coords;
+      // No nearest-station guesses for proposed tracks or unidentified branches.
+      if (!stationsById.has(line.start_sid) || !stationsById.has(line.end_sid)) continue;
+      const list = byLine.get(line.name) || [];
+      list.push({ path, from: line.start_sid, to: line.end_sid });
+      byLine.set(line.name, list);
+    }
+  }
+
+  for (const [lineName, fragments] of byLine) {
+    // A feature is a geometry fragment, not necessarily an entire station leg.
+    // Several fragments can share the same (possibly reversed) station IDs.
+    // Join only nearly coincident geometry endpoints, then find the complete
+    // track path between the endpoints associated with each declared station.
+    const points: Position[] = [];
+    const fragmentNodes = fragments.map(f => f.path.map(point => { points.push(point); return points.length - 1; }));
+    const links: { to: number; meters: number; path: Position[] }[][] = points.map(() => []);
+    const connect = (a: number, b: number) => {
+      const meters = metersBetween(points[a], points[b]);
+      links[a].push({ to: b, meters, path: [points[a], points[b]] });
+      links[b].push({ to: a, meters, path: [points[b], points[a]] });
+    };
+    for (const nodes of fragmentNodes) for (let i = 1; i < nodes.length; i++) connect(nodes[i - 1], nodes[i]);
+    // A branch endpoint can meet an existing segment between its vertices.
+    // Attach only when its projection is within the small drawing tolerance.
+    for (const nodes of fragmentNodes) for (const endpoint of [nodes[0], nodes[nodes.length - 1]]) {
+      const p = points[endpoint];
+      const cos = Math.cos(p[1] * Math.PI / 180);
+      for (const otherNodes of fragmentNodes) {
+        if (otherNodes === nodes) continue;
+        for (let i = 1; i < otherNodes.length; i++) {
+          const ai = otherNodes[i - 1], bi = otherNodes[i];
+          const a = points[ai], b = points[bi];
+          const dx = (b[0] - a[0]) * cos, dy = b[1] - a[1];
+          const t = Math.max(0, Math.min(1, (((p[0] - a[0]) * cos) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy || 1)));
+          const projected = [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])];
+          if (metersBetween(p, projected) > 10) continue;
+          for (const node of [ai, bi]) {
+            const path = [p, projected, points[node]];
+            const meters = pathLengthMeters(path);
+            links[endpoint].push({ to: node, meters, path });
+            links[node].push({ to: endpoint, meters, path: [...path].reverse() });
           }
-        } else {
-          edges.push({ to, path: reversed ? [...coords].reverse() : coords, meters });
         }
-        graph.adj.set(from, edges);
       }
+    }
+    const candidates = new Map<string, number[]>();
+    for (let i = 0; i < fragments.length; i++) for (const id of [fragments[i].from, fragments[i].to]) {
+      const nodes = fragmentNodes[i];
+      candidates.set(id, [...(candidates.get(id) || []), nodes[0], nodes[nodes.length - 1]]);
+    }
+    // TfL Metropolitan Route/Sequence/outbound lists Willesden Green on
+    // the Amersham-Aldgate stopping route (checked 2026-11-10). Its point
+    // already sits on the stored Metropolitan track geometry. Keep both
+    // the existing express leg and these explicitly supported stopping legs.
+    const additionalPairs: { from: string; to: string }[] = [];
+    if (lineName === 'Metropolitan') {
+      const id = '940GZZLUWIG';
+      const station = stationsById.get(id)!;
+      const nodes = points.flatMap((point, i) => metersBetween(station.coords, point) <= 10 ? [i] : []);
+      if (nodes.length) {
+        candidates.set(id, nodes);
+        additionalPairs.push({ from: '940GZZLUWYP', to: id }, { from: id, to: '940GZZLUFYR' });
+      }
+    }
+    const anchors = new Map<string, number>();
+    for (const [id, nodes] of candidates) {
+      const station = stationsById.get(id)!;
+      const nearest = nodes.reduce((a, b) => metersBetween(station.coords, points[a]) < metersBetween(station.coords, points[b]) ? a : b);
+      anchors.set(id, nearest);
+      // Multiple source fragments can end at different sides of the same
+      // station symbol. Join only its explicitly tagged nearby endpoints.
+      for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
+        if (metersBetween(points[nodes[i]], points[nodes[j]]) <= 40) connect(nodes[i], nodes[j]);
+      }
+    }
+    const graph: LineGraph = { stations: [...anchors.keys()].map(id => stationsById.get(id)!), adj: new Map() };
+    lineGraphs.set(lineName, graph);
+    const pairs = new Set<string>();
+    for (const fragment of [...fragments, ...additionalPairs]) {
+      const key = [fragment.from, fragment.to].sort().join('|');
+      if (pairs.has(key)) continue;
+      pairs.add(key);
+      const start = anchors.get(fragment.from)!;
+      const end = anchors.get(fragment.to)!;
+      const dist = new Map<number, number>([[start, 0]]);
+      const prev = new Map<number, { from: number; path: Position[] }>();
+      const queue = [{ node: start, meters: 0 }];
+      while (queue.length) {
+        queue.sort((a, b) => b.meters - a.meters);
+        const current = queue.pop()!;
+        if (current.meters !== dist.get(current.node)) continue;
+        if (current.node === end) break;
+        for (const edge of links[current.node]) {
+          const next = current.meters + edge.meters;
+          if (next < (dist.get(edge.to) ?? Infinity)) {
+            dist.set(edge.to, next);
+            prev.set(edge.to, { from: current.node, path: edge.path });
+            queue.push({ node: edge.to, meters: next });
+          }
+        }
+      }
+      if (!dist.has(end) || start === end) continue;
+      const parts: Position[][] = [];
+      let cursor = end;
+      while (cursor !== start) {
+        const step = prev.get(cursor)!;
+        parts.unshift(step.path);
+        cursor = step.from;
+      }
+      const path = parts.flatMap((part, i) => i ? part.slice(1) : part);
+      const from = stationsById.get(fragment.from)!;
+      const to = stationsById.get(fragment.to)!;
+      const meters = pathLengthMeters(path);
+      graph.adj.set(from.name, [...(graph.adj.get(from.name) || []), { to: to.name, path, meters }]);
+      graph.adj.set(to.name, [...(graph.adj.get(to.name) || []), { to: from.name, path: [...path].reverse(), meters }]);
     }
   }
 }
@@ -420,7 +475,7 @@ function updateSingleMotion(
 export function updateMotion(existing: MotionState | undefined, train: MotionTrain, now: number): MotionState | null {
   const sourceAt = Date.parse(train.timestamp || '');
   // An identical source snapshot must not restart dwell or undo its own plan.
-  if (existing && Number.isFinite(sourceAt) && existing.sourceAt === sourceAt) return existing;
+  if (existing && Number.isFinite(sourceAt) && existing.sourceAt !== undefined && sourceAt <= existing.sourceAt) return existing;
   const active = existing ? activeMotion(existing, now).state : undefined;
   // A cached nearest-stop record can lag behind our already active predicted
   // leg. Do not reverse to that old stop if the same feed confirms this leg.
@@ -432,7 +487,7 @@ export function updateMotion(existing: MotionState | undefined, train: MotionTra
   if (!base) return null;
   base.sourceAt = Number.isFinite(sourceAt) ? sourceAt : undefined;
   base.future = [];
-  if (!Number.isFinite(sourceAt) || now - sourceAt > 90_000 || sourceAt > now + 5000) return base;
+  if (!Number.isFinite(sourceAt) || now - sourceAt > 180_000 || sourceAt > now + 5000) return base;
   let previous = base;
   for (const prediction of (train.predictions || []).slice(0, 3)) {
     const station = (stationsData as FeatureCollection<Point>).features.find(f => f.properties?.id === prediction.naptanId);
@@ -454,8 +509,22 @@ export function updateMotion(existing: MotionState | undefined, train: MotionTra
   return base;
 }
 
+// Experimental bounded estimate window, not a freshness assertion. Our
+// 2026-11-10 capture saw source ages of 61-135s and ~60s upstream batches.
+// 180s covers that observed delivery window with a small margin. Accuracy is
+// still unknown; data older than 90s is visibly marked as an older estimate.
+// Never keep moving for 180s after receipt: the cutoff is SOURCE time + 180s.
+const EXTRAPOLATION_CAP_MS = 180_000;
+
+function motionCutoff(state: MotionState): number {
+  if (state.sourceAt === undefined) return state.receivedAt + 90_000;
+  // A malformed future timestamp must not buy indefinite extrapolation.
+  if (state.sourceAt > state.receivedAt + 5000) return state.receivedAt;
+  return state.sourceAt + EXTRAPOLATION_CAP_MS;
+}
+
 function activeMotion(state: MotionState, now: number): {state: MotionState; at: number} {
-  const cutoff = state.sourceAt === undefined ? state.receivedAt + 90_000 : state.sourceAt + 90_000;
+  const cutoff = motionCutoff(state);
   const at = Math.min(now, cutoff);
   let active = state;
   for (const next of state.future || []) {
@@ -467,13 +536,16 @@ function activeMotion(state: MotionState, now: number): {state: MotionState; at:
 
 export function motionStatus(state: MotionState, now: number) {
   const active = activeMotion(state, now).state;
+  const sourceAgeSeconds = state.sourceAt === undefined || state.sourceAt > now + 5000
+    ? undefined : Math.max(0, Math.floor((now - state.sourceAt) / 1000));
   return {target:active.targetStation, arrivalTime:active.arrivalTime,
-    stale:state.sourceAt !== undefined && now - state.sourceAt > 90_000};
+    sourceAgeSeconds, held:now >= motionCutoff(state),
+    stale:sourceAgeSeconds === undefined || now - state.sourceAt! > 90_000};
 }
 
 function progressMeters(state: MotionState, now: number): number {
   // Do not keep fabricating motion indefinitely if updates stop.
-  const at = Math.min(now, state.sourceAt === undefined ? state.receivedAt + 90_000 : state.sourceAt + 90_000);
+  const at = Math.min(now, motionCutoff(state));
   const duration = Math.max(1000, state.arrivalTime - state.startedAt, (state.totalMeters-state.startMeters)/25*1000);
   const progress = Math.max(0, Math.min(1, (at - state.startedAt) / duration));
   return state.startMeters + (state.totalMeters - state.startMeters) * progress;

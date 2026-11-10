@@ -3,11 +3,11 @@ import {createFeedLoader, FeedError} from './tfl-feed';
 const arrival={lineId:'central',vehicleId:'211',timeToStation:30};
 function mockFetch(responses: Response[]) {return vi.fn(async()=>responses.shift()!) as unknown as typeof fetch;}
 describe('batched feed reliability',()=>{
- it('requests all lines once, caches for30s, and coalesces concurrent requests',async()=>{
+ it('requests all lines once, caches for 10s, and coalesces concurrent requests',async()=>{
   let now=1000;const fetcher=mockFetch([Response.json([arrival]),Response.json([arrival])]);const load=createFeedLoader(fetcher,()=>now);
   const [a,b]=await Promise.all([load(),load()]);expect(a).toBe(b);expect(fetcher).toHaveBeenCalledTimes(1);
   expect(String(vi.mocked(fetcher).mock.calls[0][0])).toContain('bakerloo,central,circle,district');
-  now+=29_000;await load();expect(fetcher).toHaveBeenCalledTimes(1);
+  now+=9_000;await load();expect(fetcher).toHaveBeenCalledTimes(1);
   now+=2000;await load();expect(fetcher).toHaveBeenCalledTimes(2);
  });
  it('honors429 Retry-After without hammering retries',async()=>{

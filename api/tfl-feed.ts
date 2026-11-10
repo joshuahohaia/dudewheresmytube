@@ -1,7 +1,7 @@
 import type { TflArrival } from './train-selection.js';
 
 export const LINE_IDS = ['bakerloo', 'central', 'circle', 'district', 'hammersmith-city', 'jubilee', 'metropolitan', 'northern', 'piccadilly', 'victoria', 'waterloo-city'] as const;
-const TTL_MS = 30_000;
+const TTL_MS = 10_000;
 const TIMEOUT_MS = 8_000;
 
 export class FeedError extends Error {

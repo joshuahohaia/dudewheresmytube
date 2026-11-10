@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { updateMotion, motionTarget, routeStations, type MotionTrain } from './trainMotion';
+import { updateMotion, motionTarget, motionStatus, routeStations, type MotionTrain } from './trainMotion';
 import { getStationCoordinates } from './stationLookup';
 
 const NOW = 1_800_000_000_000;
@@ -145,11 +145,35 @@ describe('motionTarget: dwell and stale data', () => {
     }
   });
 
-  it('keeps the last predicted position when the feed goes stale', () => {
+  it('dwells at the target once the countdown elapses when the feed goes stale', () => {
     const state = updateMotion(undefined, makeTrain({ timeToStation: 200 }), NOW)!;
-    // no further updates; the countdown elapses and the train dwells
+    // no further updates; the countdown elapses at NOW+200s and the train holds
     const { position } = motionTarget(state, NOW + 600_000);
-    roughly(position, motionTarget(state, NOW + 90_000).position);
+    roughly(position, motionTarget(state, NOW + 300_000).position);
+  });
+
+  it('keeps moving toward the predicted arrival while the countdown runs, even past 90s of feed age', () => {
+    const state = updateMotion(undefined, makeTrain({ timeToStation: 200 }), NOW)!;
+    const queensPark = getStationCoordinates("Queen's Park")!;
+    const d = (p: [number, number]) => Math.hypot(p[0] - queensPark[0], p[1] - queensPark[1]);
+    expect(d(motionTarget(state, NOW + 150_000).position)).toBeLessThan(d(motionTarget(state, NOW + 60_000).position));
+  });
+
+  it('never extrapolates more than 3 minutes past the source timestamp, and still flags it stale', () => {
+    const state = updateMotion(
+      undefined,
+      makeTrain({ timeToStation: 900, timestamp: new Date(NOW - 100_000).toISOString() }),
+      NOW
+    )!;
+    // hard cap at sourceAt + 180s (NOW + 80s): positions pin there
+    const capped = motionTarget(state, NOW + 80_000).position;
+    roughly(motionTarget(state, NOW + 600_000).position, capped);
+    // but the anchored leg did advance before the cap
+    const queensPark = getStationCoordinates("Queen's Park")!;
+    const d = (p: [number, number]) => Math.hypot(p[0] - queensPark[0], p[1] - queensPark[1]);
+    expect(d(capped)).toBeLessThan(d(motionTarget(state, NOW).position));
+    // honesty: 100s-old source data is stale, whatever the motion does
+    expect(motionStatus(state, NOW).stale).toBe(true);
   });
 });
 

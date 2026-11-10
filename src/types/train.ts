@@ -24,6 +24,8 @@ export interface TrainWithPosition extends Train {
   heading: number; // degrees from north
   estimatedTarget?: string;
   predictionStale?: boolean;
+  predictionHeld?: boolean;
+  sourceAgeSeconds?: number;
 }
 
 export interface TrainsResponse {
