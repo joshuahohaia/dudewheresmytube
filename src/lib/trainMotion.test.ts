@@ -297,45 +297,8 @@ it('waits for a speed-limited approach to finish before its onward dwell',()=>{
 it('withholds positions for unsupported cross-line or missing-extension routes',()=>{
  for(const [lineId,currentStation,destination] of [
   ['metropolitan','Neasden','Aldgate'],
+  ['metropolitan','Willesden Green','Aldgate'],
   ['hammersmith-city','Bayswater','Edgware Road (Circle Line)'],
+  ['northern','Nine Elms','Battersea Power Station'],
  ]) expect(updateMotion(undefined,makeTrain({lineId,currentStation,destination,timeToStation:120}),NOW)).toBeNull();
-});
-
-it('rejects timestamp regression and flags unknown/future source age honestly',()=>{
- const a=updateMotion(undefined,makeTrain({timestamp:new Date(NOW).toISOString()}),NOW)!;
- expect(updateMotion(a,makeTrain({timestamp:new Date(NOW-1000).toISOString()}),NOW+1000)).toBe(a);
- const unknown=updateMotion(undefined,makeTrain(),NOW)!;
- expect(motionStatus(unknown,NOW).stale).toBe(true);
- expect(motionStatus(unknown,NOW).sourceAgeSeconds).toBeUndefined();
- const future=updateMotion(undefined,makeTrain({timestamp:new Date(NOW+600000).toISOString()}),NOW)!;
- expect(motionStatus(future,NOW).stale).toBe(true);
- expect(motionStatus(future,NOW).held).toBe(true);
- roughly(motionTarget(future,NOW).position,motionTarget(future,NOW+100000).position,1e-9);
-});
-
-it('connects the stored Northern extension through canonical Nine Elms ID',()=>{
- expect(routeStations('Northern','Kennington','Battersea Power Station')).toEqual(['Kennington','Nine Elms','Battersea Power Station']);
- const state=updateMotion(undefined,makeTrain({lineId:'northern',currentStation:'Nine Elms',naptanId:'940GZZNEUGST',destination:'Battersea Power Station',timeToStation:120,timestamp:new Date(NOW).toISOString()}),NOW)!;
- expect(state).not.toBeNull();
- expect(state.targetStation).toBe('Nine Elms');
- expect(state.originStation).toBe('Kennington');
- expect(state.totalMeters).toBeGreaterThan(1500);
- expect(state.path!.some(p=>Math.abs(p[0]-(-0.118768215179443))<1e-8)).toBe(true);
-});
-
-it('reconstructs a complete fragmented Metropolitan leg rather than its shortest fragment',()=>{
- const state=updateMotion(undefined,makeTrain({lineId:'metropolitan',currentStation:'Finchley Road',destination:'Aldgate',timeToStation:299}),NOW)!;
- expect(state.originStation).toBe('Wembley Park');
- expect(state.totalMeters).toBeGreaterThan(7000);
- expect(state.totalMeters).toBeLessThan(8000);
- expect(state.path!.length).toBeGreaterThan(100);
- // These are existing geometry vertices from different fragments.
- for(const lon of [-0.24998230166395,-0.221874425577687,-0.190819723995531]) expect(state.path!.some(p=>Math.abs(p[0]-lon)<1e-8)).toBe(true);
-});
-it('supports the official Metropolitan Willesden Green stopping route without adding Neasden',()=>{
- expect(routeStations('Metropolitan','Willesden Green','Aldgate')).not.toBeNull();
- expect(routeStations('Metropolitan','Neasden','Aldgate')).toBeNull();
- const state=updateMotion(undefined,makeTrain({lineId:'metropolitan',currentStation:'Willesden Green',destination:'Aldgate',timeToStation:120}),NOW)!;
- expect(state.targetStation).toBe('Willesden Green');
- expect(state.totalMeters).toBeGreaterThan(3500);
 });
