@@ -105,6 +105,12 @@ export function TubeMap() {
     }
   });
   const [staleInfoOpen, setStaleInfoOpen] = useState(false);
+
+  // Follow-a-train state
+  const [followedId, setFollowedId] = useState<string | null>(null);
+  const [followSpeed, setFollowSpeed] = useState<number | null>(null);
+  const followMarker = useRef<maplibregl.Marker | null>(null);
+  const speedSamples = useRef<Array<[number, number, number]>>([]);
   const REFETCH_INTERVAL = 10; // seconds
 
   useEffect(() => {
