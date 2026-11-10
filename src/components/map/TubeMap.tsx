@@ -492,6 +492,11 @@ export function TubeMap() {
                 <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
                 {positions.length} trains {error ? '(last known)' : 'live'}
               </span>
+              {trainsData && trainsData.trains.some(t => !positions.some(p => p.id === t.id)) && (
+                <span className="block text-[11px] text-gray-400 mt-1">
+                  {trainsData.trains.filter(t => !positions.some(p => p.id === t.id)).length} services without a position estimate
+                </span>
+              )}
               <span className="block text-[11px] text-gray-400 mt-1">
                 Movement and station departures are estimates
               </span>
@@ -541,7 +546,9 @@ export function TubeMap() {
             </div>
           ) : (
             <div className="flex items-start justify-between gap-3">
-              <div className="text-sm text-gray-300">This train has left the live feed.</div>
+              <div className="text-sm text-gray-300">{trainsData?.trains.some(t => t.id === followedId)
+                ? 'Position estimate unavailable for this service.'
+                : 'This service has left the live feed.'}</div>
               <button
                 type="button"
                 onClick={() => setFollowedId(null)}
