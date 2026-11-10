@@ -6,5 +6,15 @@ it('retains only sorted same-service future stations, capped at3',()=>{
  expect(predictionHorizon(rows,base,now).map(p=>p.naptanId)).toEqual(['1','0','2']);
  expect(predictionHorizon([{...rows[0],vehicleId:'212'},{...rows[0],direction:'outbound'},{...rows[0],destinationName:'Other'}],base,now)).toEqual([]);
 });
-it('does not extend stale or untimed predictions',()=>{expect(predictionHorizon([{...base,naptanId:'b'}],{...base,timestamp:new Date(now-91000).toISOString()},now)).toEqual([]);expect(predictionHorizon([base],{...base,expectedArrival:undefined},now)).toEqual([]);});
+it('extends moderately old predictions but not very old or untimed ones',()=>{
+ const aged=new Date(now-120000).toISOString();
+ const future={...base,naptanId:'b',timestamp:aged,expectedArrival:new Date(now+60000).toISOString()};
+ // 120s-old batch: onward predictions stay usable - they carry absolute arrival times
+ expect(predictionHorizon([future],{...base,timestamp:aged},now)).toHaveLength(1);
+ // 200s-old batch: beyond the trust window
+ const old2=new Date(now-200000).toISOString();
+ expect(predictionHorizon([{...future,timestamp:old2}],{...base,timestamp:old2},now)).toEqual([]);
+ // untimed predictions never extend
+ expect(predictionHorizon([base],{...base,expectedArrival:undefined},now)).toEqual([]);
+});
 it('deduplicates station IDs',()=>{const a={...base,naptanId:'b',expectedArrival:new Date(now+30000).toISOString()};expect(predictionHorizon([a,a],base,now)).toHaveLength(1);});
