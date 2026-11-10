@@ -450,7 +450,7 @@ export function TubeMap() {
       <div className="absolute top-4 left-4 flex flex-col gap-2">
         <div className="bg-black/80 text-white px-4 py-2 rounded">
           <h1 className="text-lg font-bold tracking-tight">Dude Wheres My Tube?</h1>
-          <p className="text-xs text-gray-400">Live London Underground Tracker</p>
+          <p className="text-xs text-gray-400">London Underground position estimates</p>
         </div>
         <div className="bg-black/70 text-white px-3 py-2 rounded text-sm">
           {isLoading && !positions.length && <span>Loading trains...</span>}
@@ -467,7 +467,7 @@ export function TubeMap() {
               />
               {staleInfoOpen && (
                 <span className="text-amber-200/90 text-[11px]">
-                  Some estimates are held on older feed data.
+                  Some estimates use older feed data.
                   <button
                     type="button"
                     className="ml-1 underline hover:text-amber-100"
@@ -490,7 +490,7 @@ export function TubeMap() {
             <>
               <span className="flex items-center gap-2">
                 <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                {positions.length} trains {error ? '(last known)' : 'live'}
+                {positions.length} trains {error ? '(last known)' : 'tracked'}
               </span>
               <span className="block text-[11px] text-gray-400 mt-1">
                 Movement and station departures are estimates
@@ -516,7 +516,7 @@ export function TubeMap() {
                 </div>
                 <div className="mt-1 text-sm">
                   {followedTrain.predictionStale ? (
-                    <span className="text-amber-300">Estimate held - feed data is stale</span>
+                    <span className="text-amber-300">{followedTrain.predictionHeld ? 'Estimate held' : 'Older estimate'} - {followedTrain.sourceAgeSeconds === undefined ? 'feed age unknown' : `feed ${formatCountdown(followedTrain.sourceAgeSeconds)} old`}</span>
                   ) : (
                     <span>
                       Next: {followedTrain.estimatedTarget || followedTrain.currentStation} in{' '}
@@ -525,9 +525,10 @@ export function TubeMap() {
                   )}
                 </div>
                 <div className="mt-1 text-xs text-gray-400 flex gap-3 flex-wrap">
-                  {followSpeed !== null && <span>{formatSpeed(followSpeed)} est.</span>}
+                  {!followedTrain.predictionHeld && followSpeed !== null && <span>{formatSpeed(followSpeed)} est.</span>}
                   <span>heading {compassDirection(followedTrain.heading)}</span>
                   <span className="text-gray-500">positions are estimates</span>
+                  {!followedTrain.predictionStale && <span>feed {followedTrain.sourceAgeSeconds === undefined ? 'age unknown' : `${formatCountdown(followedTrain.sourceAgeSeconds)} old`}</span>}
                 </div>
               </div>
               <button
@@ -562,7 +563,7 @@ export function TubeMap() {
       <div className="hidden sm:block absolute top-4 right-4 bg-black/70 text-white px-3 py-2 rounded text-sm font-mono">
         <div className="flex items-center gap-3">
           <div className="text-center">
-            <div className="text-xs text-gray-400">Last update</div>
+            <div className="text-xs text-gray-400">Last refresh</div>
             <div className={isFetching ? 'text-yellow-400' : ''}>
               {isFetching ? 'fetching...' : `${timeInfo.sinceLast}s ago`}
             </div>

@@ -416,7 +416,7 @@ function updateSingleMotion(
 export function updateMotion(existing: MotionState | undefined, train: MotionTrain, now: number): MotionState | null {
   const sourceAt = Date.parse(train.timestamp || '');
   // An identical source snapshot must not restart dwell or undo its own plan.
-  if (existing && Number.isFinite(sourceAt) && existing.sourceAt === sourceAt) return existing;
+  if (existing && Number.isFinite(sourceAt) && existing.sourceAt !== undefined && sourceAt <= existing.sourceAt) return existing;
   const active = existing ? activeMotion(existing, now).state : undefined;
   // A cached nearest-stop record can lag behind our already active predicted
   // leg. Do not reverse to that old stop if the same feed confirms this leg.
@@ -428,7 +428,7 @@ export function updateMotion(existing: MotionState | undefined, train: MotionTra
   if (!base) return null;
   base.sourceAt = Number.isFinite(sourceAt) ? sourceAt : undefined;
   base.future = [];
-  if (!Number.isFinite(sourceAt) || now - sourceAt > 90_000 || sourceAt > now + 5000) return base;
+  if (!Number.isFinite(sourceAt) || now - sourceAt > 180_000 || sourceAt > now + 5000) return base;
   let previous = base;
   for (const prediction of (train.predictions || []).slice(0, 3)) {
     const station = (stationsData as FeatureCollection<Point>).features.find(f => f.properties?.id === prediction.naptanId);
@@ -450,8 +450,22 @@ export function updateMotion(existing: MotionState | undefined, train: MotionTra
   return base;
 }
 
+// Experimental bounded estimate window, not a freshness assertion. Our
+// 2026-11-10 capture saw source ages of 61-135s and ~60s upstream batches.
+// 180s covers that observed delivery window with a small margin. Accuracy is
+// still unknown; data older than 90s is visibly marked as an older estimate.
+// Never keep moving for 180s after receipt: the cutoff is SOURCE time + 180s.
+const EXTRAPOLATION_CAP_MS = 180_000;
+
+function motionCutoff(state: MotionState): number {
+  if (state.sourceAt === undefined) return state.receivedAt + 90_000;
+  // A malformed future timestamp must not buy indefinite extrapolation.
+  if (state.sourceAt > state.receivedAt + 5000) return state.receivedAt;
+  return state.sourceAt + EXTRAPOLATION_CAP_MS;
+}
+
 function activeMotion(state: MotionState, now: number): {state: MotionState; at: number} {
-  const cutoff = state.sourceAt === undefined ? state.receivedAt + 90_000 : state.sourceAt + 90_000;
+  const cutoff = motionCutoff(state);
   const at = Math.min(now, cutoff);
   let active = state;
   for (const next of state.future || []) {
@@ -463,13 +477,16 @@ function activeMotion(state: MotionState, now: number): {state: MotionState; at:
 
 export function motionStatus(state: MotionState, now: number) {
   const active = activeMotion(state, now).state;
+  const sourceAgeSeconds = state.sourceAt === undefined || state.sourceAt > now + 5000
+    ? undefined : Math.max(0, Math.floor((now - state.sourceAt) / 1000));
   return {target:active.targetStation, arrivalTime:active.arrivalTime,
-    stale:state.sourceAt !== undefined && now - state.sourceAt > 90_000};
+    sourceAgeSeconds, held:now >= motionCutoff(state),
+    stale:sourceAgeSeconds === undefined || now - state.sourceAt! > 90_000};
 }
 
 function progressMeters(state: MotionState, now: number): number {
   // Do not keep fabricating motion indefinitely if updates stop.
-  const at = Math.min(now, state.sourceAt === undefined ? state.receivedAt + 90_000 : state.sourceAt + 90_000);
+  const at = Math.min(now, motionCutoff(state));
   const duration = Math.max(1000, state.arrivalTime - state.startedAt, (state.totalMeters-state.startMeters)/25*1000);
   const progress = Math.max(0, Math.min(1, (at - state.startedAt) / duration));
   return state.startMeters + (state.totalMeters - state.startMeters) * progress;

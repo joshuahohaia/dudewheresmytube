@@ -88,6 +88,8 @@ export function useTrainPositions(trains: Train[] | undefined, dataUpdatedAt?: n
         timeToStation: Math.max(0, Math.ceil((status.arrivalTime - now) / 1000)),
         estimatedTarget: status.target,
         predictionStale: status.stale,
+        predictionHeld: status.held,
+        sourceAgeSeconds: status.sourceAgeSeconds,
         heading,
       });
     });
