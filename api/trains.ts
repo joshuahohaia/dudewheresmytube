@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { predictionHorizon } from './prediction-horizon.js';
 import { selectNearestEligibleArrivals } from './train-selection.js';
 import { createFeedLoader, FeedError, LINE_IDS } from './tfl-feed.js';
 
@@ -22,6 +23,7 @@ export default async function handler(_req: VercelRequest, res: VercelResponse) 
       timeToStation: arrival.timeToStation,
       // Compatible with the motion follow-up without requiring that PR first.
       expectedArrival: arrival.expectedArrival,
+      predictions: predictionHorizon(feed.arrivals, arrival),
       timestamp: arrival.timestamp,
       direction: arrival.direction || '', vehicleId: arrival.vehicleId, naptanId: arrival.naptanId || '',
     })));

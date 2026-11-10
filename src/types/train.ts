@@ -1,3 +1,9 @@
+export interface StationPrediction {
+  station: string;
+  naptanId: string;
+  expectedArrival: string;
+}
+
 export interface Train {
   id: string;
   lineId: string;
@@ -6,6 +12,7 @@ export interface Train {
   destination: string;
   expectedArrival?: string;
   timestamp?: string;
+  predictions?: StationPrediction[];
   timeToStation: number; // seconds
   direction: string;
   vehicleId: string;
@@ -15,6 +22,8 @@ export interface Train {
 export interface TrainWithPosition extends Train {
   position: [number, number]; // [lng, lat]
   heading: number; // degrees from north
+  estimatedTarget?: string;
+  predictionStale?: boolean;
 }
 
 export interface TrainsResponse {
