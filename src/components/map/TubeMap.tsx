@@ -3,6 +3,7 @@ import maplibregl from 'maplibre-gl';
 import { isUndergroundLine, LINE_COLORS } from '../../lib/lineColors';
 import { useTrains } from '../../hooks/useTrains';
 import { useTrainPositions } from '../../hooks/useTrainPositions';
+import { compassDirection, formatCountdown, formatSpeed, estimateSpeed } from '../../lib/followFormat';
 import linesData from '../../data/tfl_lines.json';
 import stationsData from '../../data/tfl_stations.json';
 import type { FeatureCollection, Feature, LineString, Point } from 'geojson';
@@ -92,6 +93,12 @@ export function TubeMap() {
 
   // Countdown timer state
   const [timeInfo, setTimeInfo] = useState({ sinceLast: 0, untilNext: 10 });
+
+  // Follow-a-train state
+  const [followedId, setFollowedId] = useState<string | null>(null);
+  const [followSpeed, setFollowSpeed] = useState<number | null>(null);
+  const followMarker = useRef<maplibregl.Marker | null>(null);
+  const speedSamples = useRef<Array<[number, number, number]>>([]);
   const REFETCH_INTERVAL = 10; // seconds
 
   useEffect(() => {
@@ -331,31 +338,16 @@ export function TubeMap() {
         },
       });
 
-      // Add popup on train click
+      // Click a train to follow it: pulsing ring, camera tracking, detail panel.
       mapInstance.on('click', 'trains-layer', (e) => {
         if (!e.features || e.features.length === 0) return;
-
-        const feature = e.features[0];
-        const props = feature.properties;
-        const coordinates = (feature.geometry as Point).coordinates.slice() as [number, number];
-
-        new maplibregl.Popup({ closeButton: false, className: 'train-popup' })
-          .setLngLat(coordinates)
-          .setHTML(`
-            <div style="font-family: system-ui, sans-serif; padding: 2px;">
-              <div style="font-weight: 600; color: ${props?.color}; border-bottom: 2px solid ${props?.color}; padding-bottom: 4px; margin-bottom: 4px;">
-                ${props?.lineName} Line
-              </div>
-              <div style="color: #333; font-size: 13px;">
-                <div>→ ${props?.destination}</div>
-                <div style="color: #666; font-size: 11px; margin-top: 2px;">
-                  ${props?.predictionStale ? 'Last known estimate (prediction stale)' : `est. ${props?.timeToStation}s to ${props?.target}`}
-                </div>
-              </div>
-            </div>
-          `)
-          .addTo(mapInstance);
+        const id = e.features[0].properties?.id as string | undefined;
+        if (id) setFollowedId((current) => (current === id ? null : id));
       });
+
+      // Grabbing or zooming the map releases the follow camera.
+      mapInstance.on('dragstart', () => setFollowedId(null));
+      mapInstance.on('wheel', () => setFollowedId(null));
 
       // Change cursor on hover
       mapInstance.on('mouseenter', 'trains-layer', () => {
@@ -373,6 +365,51 @@ export function TubeMap() {
       mapLoaded.current = false;
     };
   }, []);
+
+  // Follow mode: select animation, camera tracking and speed sampling.
+  // Runs on every position frame; setCenter on a smoothly moving train keeps
+  // the ride fluid rather than jumpy.
+  const followedTrain = followedId ? positions.find((p) => p.id === followedId) : undefined;
+
+  useEffect(() => {
+    const mapInstance = map.current;
+    if (!mapInstance || !mapLoaded.current) return;
+
+    if (!followedId) {
+      followMarker.current?.remove();
+      followMarker.current = null;
+      speedSamples.current = [];
+      setFollowSpeed(null);
+      return;
+    }
+
+    const train = positions.find((p) => p.id === followedId);
+    if (!train) return;
+
+    if (!followMarker.current) {
+      const el = document.createElement('div');
+      el.className = 'follow-ring';
+      followMarker.current = new maplibregl.Marker({ element: el, anchor: 'center' })
+        .setLngLat(train.position)
+        .addTo(mapInstance);
+      // Selection animation: ease in and tighten the zoom on the train.
+      mapInstance.easeTo({
+        center: train.position,
+        zoom: Math.max(mapInstance.getZoom(), 13),
+        duration: 900,
+      });
+    }
+
+    followMarker.current.getElement().style.borderColor = LINE_COLORS[train.lineName] || '#ffffff';
+    followMarker.current.setLngLat(train.position);
+    mapInstance.setCenter(train.position);
+
+    const now = Date.now();
+    const samples = speedSamples.current;
+    samples.push([now, train.position[0], train.position[1]]);
+    while (samples.length > 40) samples.shift();
+    setFollowSpeed(estimateSpeed(samples));
+  }, [positions, followedId]);
 
   return (
     <div className="relative w-full h-full">
@@ -402,6 +439,64 @@ export function TubeMap() {
           )}
         </div>
       </div>
+
+      {/* Followed-train detail panel */}
+      {followedId && (
+        <div className="absolute bottom-4 left-4 right-4 sm:right-auto sm:min-w-80 sm:max-w-sm bg-black/85 text-white rounded-lg p-3 shadow-lg border border-white/10">
+          {followedTrain ? (
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span
+                    className="inline-block w-3 h-3 rounded-full shrink-0"
+                    style={{ backgroundColor: LINE_COLORS[followedTrain.lineName] || '#888888' }}
+                  />
+                  <span className="font-semibold">{followedTrain.lineName} Line</span>
+                  <span className="text-gray-400 text-sm truncate">→ {followedTrain.destination}</span>
+                </div>
+                <div className="mt-1 text-sm">
+                  {followedTrain.predictionStale ? (
+                    <span className="text-amber-300">Estimate held - feed data is stale</span>
+                  ) : (
+                    <span>
+                      Next: {followedTrain.estimatedTarget || followedTrain.currentStation} in{' '}
+                      {formatCountdown(followedTrain.timeToStation)} (est.)
+                    </span>
+                  )}
+                </div>
+                <div className="mt-1 text-xs text-gray-400 flex gap-3 flex-wrap">
+                  {followSpeed !== null && <span>{formatSpeed(followSpeed)} est.</span>}
+                  <span>heading {compassDirection(followedTrain.heading)}</span>
+                  <span className="text-gray-500">positions are estimates</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setFollowedId(null)}
+                aria-label="Stop following"
+                className="text-gray-400 hover:text-white text-xl leading-none px-1"
+              >
+                ×
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-start justify-between gap-3">
+              <div className="text-sm text-gray-300">This train has left the live feed.</div>
+              <button
+                type="button"
+                onClick={() => setFollowedId(null)}
+                aria-label="Close"
+                className="text-gray-400 hover:text-white text-xl leading-none px-1"
+              >
+                ×
+              </button>
+            </div>
+          )}
+          {followedTrain && (
+            <div className="mt-1 text-[11px] text-gray-500">Following - drag or scroll the map to release</div>
+          )}
+        </div>
+      )}
 
       {/* Timer badge - desktop/tablet only; keep mobile map uncluttered. */}
       <div className="hidden sm:block absolute top-4 right-4 bg-black/70 text-white px-3 py-2 rounded text-sm font-mono">
