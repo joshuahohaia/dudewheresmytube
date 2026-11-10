@@ -160,15 +160,10 @@ describe('updateMotion: unmappable data', () => {
     ).toBeNull();
   });
 
-  it('falls back to sitting at the target when the line has no geometry', () => {
-    const state = updateMotion(
-      undefined,
+  it('does not pretend a future target is the current position when geometry is unavailable', () => {
+    expect(updateMotion(undefined,
       { id: 'x-1', lineId: 'not-a-line', currentStation: "Queen's Park", destination: 'Nowhere', timeToStation: 60 },
-      NOW
-    )!;
-    expect(state.path).toBeNull();
-    const { position } = motionTarget(state, NOW);
-    roughly(position, motionTarget(state, NOW + 90_000).position);
+      NOW)).toBeNull();
   });
 });
 
@@ -270,4 +265,16 @@ it('waits for a speed-limited approach to finish before its onward dwell',()=>{
  const next=a.future![0];
  expect(next.startedAt).toBeGreaterThan(NOW+21000);
  roughly(motionTarget(a,next.startedAt-1).position,motionTarget(a,next.startedAt).position,1e-6);
+});
+
+// Real-feed regression cases captured Nov 10, 2026. These combinations are
+// present in the feed but absent from this app's geometry. Do not invent
+// coordinates at the destination while arrival is still in the future.
+it('withholds positions for unsupported cross-line or missing-extension routes',()=>{
+ for(const [lineId,currentStation,destination] of [
+  ['metropolitan','Neasden','Aldgate'],
+  ['metropolitan','Willesden Green','Aldgate'],
+  ['hammersmith-city','Bayswater','Edgware Road (Circle Line)'],
+  ['northern','Nine Elms','Battersea Power Station'],
+ ]) expect(updateMotion(undefined,makeTrain({lineId,currentStation,destination,timeToStation:120}),NOW)).toBeNull();
 });
