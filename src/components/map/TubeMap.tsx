@@ -111,6 +111,8 @@ export function TubeMap() {
   const [followSpeed, setFollowSpeed] = useState<number | null>(null);
   const followMarker = useRef<maplibregl.Marker | null>(null);
   const speedSamples = useRef<Array<[number, number, number]>>([]);
+  const cameraSelection = useRef<string | null>(null);
+  const cameraEaseUntil = useRef(0);
   const REFETCH_INTERVAL = 10; // seconds
 
   useEffect(() => {
@@ -358,6 +360,10 @@ export function TubeMap() {
       });
 
       // Grabbing or zooming the map releases the follow camera.
+      // Release before a gesture starts. Per-frame camera tracking otherwise
+      // competes with drag-pan before MapLibre reaches its dragstart threshold.
+      mapInstance.on('mousedown', () => setFollowedId(null));
+      mapInstance.on('touchstart', () => setFollowedId(null));
       mapInstance.on('dragstart', () => setFollowedId(null));
       mapInstance.on('wheel', () => setFollowedId(null));
 
@@ -391,12 +397,18 @@ export function TubeMap() {
       followMarker.current?.remove();
       followMarker.current = null;
       speedSamples.current = [];
-      setFollowSpeed(null);
+      cameraSelection.current = null;
+      cameraEaseUntil.current = 0;
       return;
     }
 
     const train = positions.find((p) => p.id === followedId);
-    if (!train) return;
+    if (!train) {
+      followMarker.current?.remove();
+      followMarker.current = null;
+      cameraSelection.current = null;
+      return;
+    }
 
     if (!followMarker.current) {
       const el = document.createElement('div');
@@ -404,7 +416,13 @@ export function TubeMap() {
       followMarker.current = new maplibregl.Marker({ element: el, anchor: 'center' })
         .setLngLat(train.position)
         .addTo(mapInstance);
-      // Selection animation: ease in and tighten the zoom on the train.
+    }
+
+    if (cameraSelection.current !== followedId) {
+      cameraSelection.current = followedId;
+      speedSamples.current = [];
+      cameraEaseUntil.current = Date.now() + 900;
+      // Let selection ease finish before per-frame tracking takes over.
       mapInstance.easeTo({
         center: train.position,
         zoom: Math.max(mapInstance.getZoom(), 13),
@@ -414,13 +432,14 @@ export function TubeMap() {
 
     followMarker.current.getElement().style.borderColor = LINE_COLORS[train.lineName] || '#ffffff';
     followMarker.current.setLngLat(train.position);
-    mapInstance.setCenter(train.position);
+    if (Date.now() >= cameraEaseUntil.current) mapInstance.setCenter(train.position);
 
     const now = Date.now();
     const samples = speedSamples.current;
     samples.push([now, train.position[0], train.position[1]]);
     while (samples.length > 40) samples.shift();
-    setFollowSpeed(estimateSpeed(samples));
+    const frame = requestAnimationFrame(() => setFollowSpeed(estimateSpeed(samples)));
+    return () => cancelAnimationFrame(frame);
   }, [positions, followedId]);
 
   return (
@@ -483,7 +502,7 @@ export function TubeMap() {
 
       {/* Followed-train detail panel */}
       {followedId && (
-        <div className="absolute bottom-4 left-4 right-4 sm:right-auto sm:min-w-80 sm:max-w-sm bg-black/85 text-white rounded-lg p-3 shadow-lg border border-white/10">
+        <div className="absolute bottom-12 sm:bottom-4 left-4 right-4 sm:right-auto sm:min-w-80 sm:max-w-sm bg-black/85 text-white rounded-lg p-3 shadow-lg border border-white/10">
           {followedTrain ? (
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0">
